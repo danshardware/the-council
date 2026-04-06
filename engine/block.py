@@ -1,0 +1,304 @@
+"""Block types — each maps to a PocketFlow Node subclass."""
+
+from __future__ import annotations
+
+import sys
+import os
+from typing import Any
+
+import yaml
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pocketflow import Node
+from engine.llm import call_llm
+from tools import get_tool, ToolContext
+
+_console = Console()
+
+
+class MaxIterationsError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Base
+# ---------------------------------------------------------------------------
+
+class BaseBlock(Node):
+    def __init__(self, block_id: str, config: dict) -> None:
+        super().__init__()
+        self.block_id = block_id
+        self.config = config
+
+    def _check_iterations(self, shared: dict) -> None:
+        shared["iteration"] = shared.get("iteration", 0) + 1
+        visits = shared.setdefault("block_visits", {})
+        visits[self.block_id] = visits.get(self.block_id, 0) + 1
+
+        max_iter: int = shared.get("max_iterations", 50)
+        if shared["iteration"] > max_iter:
+            raise MaxIterationsError(
+                f"Max iterations ({max_iter}) reached at block '{self.block_id}'"
+            )
+        max_visits = self.config.get("max_visits")
+        if max_visits and visits[self.block_id] > max_visits:
+            raise MaxIterationsError(
+                f"Block '{self.block_id}' exceeded max_visits={max_visits}"
+            )
+
+    def _default_model(self, shared: dict) -> str:
+        return shared["agent_config"]["model_defaults"]["model_id"]
+
+    def _get_bedrock_tools(self, shared: dict) -> list:
+        ctx: ToolContext = shared["tool_context"]
+        tools = []
+        for name in self.config.get("tools", []):
+            bt = get_tool(name, ctx)
+            if bt is not None:
+                tools.append(bt)
+        return tools
+
+    def _log(self, shared: dict, event: str, **kwargs: Any) -> None:
+        shared["logger"].log_event(shared, event, block=self.block_id, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# LLM block
+# ---------------------------------------------------------------------------
+
+class LLMBlock(BaseBlock):
+    def prep(self, shared: dict) -> dict:
+        self._check_iterations(shared)
+        self._log(shared, "block_enter", iteration=shared["iteration"])
+        self._model_id = self.config.get("model_id") or self._default_model(shared)
+        self._tools = self._get_bedrock_tools(shared)
+        return dict(shared)  # pass a snapshot
+
+    def exec(self, prep_res: dict) -> dict:
+        messages = list(prep_res.get("messages", []))
+        parsed, in_tok, out_tok = call_llm(
+            model_id=self._model_id,
+            system_prompt=self.config["system_prompt"],
+            messages=messages,
+            tools=self._tools or None,
+        )
+        parsed["_in_tokens"] = in_tok
+        parsed["_out_tokens"] = out_tok
+        return parsed
+
+    def post(self, shared: dict, prep_res: dict, exec_res: dict) -> str:
+        action = exec_res.get("action", "default")
+        in_tok = exec_res.pop("_in_tokens", 0)
+        out_tok = exec_res.pop("_out_tokens", 0)
+
+        shared["action"] = action
+        shared["action_input"] = exec_res.get("action_input", {})
+
+        # Append LLM response to conversation history (raw YAML text)
+        reasoning = exec_res.get("reasoning", "")
+        response_text = yaml.dump(exec_res, default_flow_style=False)
+        shared["messages"].append({"role": "assistant", "content": response_text})
+
+        self._log(
+            shared,
+            "llm_call",
+            model=self._model_id,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
+        self._log(shared, "transition", from_block=self.block_id, to_action=action)
+
+        _console.print(
+            Panel(
+                Text.from_markup(
+                    f"[bold cyan]{self.block_id}[/bold cyan]  "
+                    f"[yellow]action:[/yellow] {action}\n"
+                    f"[dim]{reasoning[:200]}[/dim]"
+                ),
+                title=f"[green]LLM[/green] • iter {shared['iteration']}",
+                border_style="green",
+            )
+        )
+        return action
+
+
+# ---------------------------------------------------------------------------
+# Guardrail block
+# ---------------------------------------------------------------------------
+
+class GuardrailBlock(BaseBlock):
+    def prep(self, shared: dict) -> dict:
+        self._check_iterations(shared)
+        self._log(shared, "block_enter", iteration=shared["iteration"])
+        self._model_id = self.config.get("model_id") or self._default_model(shared)
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> dict:
+        action = prep_res.get("action", "")
+        action_input = prep_res.get("action_input", {})
+        user_msg = (
+            f"Proposed action: {action}\n"
+            f"Action input:\n{yaml.dump(action_input, default_flow_style=False)}"
+        )
+        parsed, in_tok, out_tok = call_llm(
+            model_id=self._model_id,
+            system_prompt=self.config["system_prompt"],
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        parsed["_in_tokens"] = in_tok
+        parsed["_out_tokens"] = out_tok
+        return parsed
+
+    def post(self, shared: dict, prep_res: dict, exec_res: dict) -> str:
+        verdict = exec_res.get("verdict", "approved")
+        reason = exec_res.get("reason", "")
+        in_tok = exec_res.pop("_in_tokens", 0)
+        out_tok = exec_res.pop("_out_tokens", 0)
+
+        self._log(
+            shared,
+            "guardrail",
+            verdict=verdict,
+            reason=reason,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
+
+        if verdict != "approved":
+            # Inject system message so the agent knows the action was blocked
+            shared["messages"].append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM] Your proposed action '{shared.get('action')}' "
+                    f"was {verdict} by the safety guardrail. Reason: {reason}. "
+                    "Please reconsider."
+                ),
+            })
+
+        style = "green" if verdict == "approved" else "red"
+        _console.print(
+            Panel(
+                f"[bold]{verdict}[/bold] — {reason}",
+                title=f"[{style}]Guardrail • {self.block_id}[/{style}]",
+                border_style=style,
+            )
+        )
+        return verdict
+
+
+# ---------------------------------------------------------------------------
+# Tool-call block (no LLM — directly invokes a named tool)
+# ---------------------------------------------------------------------------
+
+class ToolCallBlock(BaseBlock):
+    def prep(self, shared: dict) -> dict:
+        self._check_iterations(shared)
+        self._log(shared, "block_enter", iteration=shared["iteration"])
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> Any:
+        tool_name: str = self.config["tool"]
+        ctx: ToolContext = prep_res["tool_context"]
+        bt = get_tool(tool_name, ctx)
+        if bt is None:
+            raise ValueError(f"Tool '{tool_name}' not found in registry")
+        action_input: dict = prep_res.get("action_input", {})
+        import time
+        t0 = time.monotonic()
+        result = bt(**action_input)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        return {"result": result, "duration_ms": duration_ms, "tool": tool_name}
+
+    def post(self, shared: dict, prep_res: dict, exec_res: dict) -> str:
+        self._log(
+            shared,
+            "tool_call",
+            tool=exec_res["tool"],
+            duration_ms=exec_res["duration_ms"],
+        )
+        shared["messages"].append({
+            "role": "user",
+            "content": f"[SYSTEM] Tool '{exec_res['tool']}' result: {exec_res['result']}",
+        })
+        _console.print(
+            Panel(
+                f"[bold]{exec_res['tool']}[/bold] → {str(exec_res['result'])[:300]}",
+                title="[blue]Tool Call[/blue]",
+                border_style="blue",
+            )
+        )
+        return "default"
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint block (Layer 1: just logs + continues; mailbox added in Layer 6)
+# ---------------------------------------------------------------------------
+
+class CheckpointBlock(BaseBlock):
+    def prep(self, shared: dict) -> dict:
+        self._log(shared, "checkpoint", mode=self.config.get("mode", "noop"))
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> None:
+        return None
+
+    def post(self, shared: dict, prep_res: dict, exec_res: Any) -> str:
+        _console.print(
+            Panel(
+                f"Checkpoint reached (mode: {self.config.get('mode', 'noop')}). "
+                "Mailbox suspension not yet implemented — continuing.",
+                title="[yellow]Checkpoint[/yellow]",
+                border_style="yellow",
+            )
+        )
+        on_timeout = self.config.get("on_timeout", "default")
+        return on_timeout
+
+
+# ---------------------------------------------------------------------------
+# Human-input block
+# ---------------------------------------------------------------------------
+
+class HumanInputBlock(BaseBlock):
+    def prep(self, shared: dict) -> dict:
+        self._log(shared, "human_input_requested")
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> str:
+        prompt = self.config.get("prompt", "Agent requires input [y/n]: ")
+        _console.print(f"\n[bold magenta]Human Input Required:[/bold magenta] {prompt}", end="")
+        response = input().strip().lower()
+        return response
+
+    def post(self, shared: dict, prep_res: dict, exec_res: str) -> str:
+        verdict = "approved" if exec_res in ("y", "yes", "approved") else "rejected"
+        self._log(shared, "human_input_received", verdict=verdict, raw=exec_res)
+        shared["messages"].append({
+            "role": "user",
+            "content": f"[HUMAN] Response to confirmation request: {verdict}",
+        })
+        return verdict
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+BLOCK_TYPES = {
+    "llm": LLMBlock,
+    "guardrail": GuardrailBlock,
+    "tool_call": ToolCallBlock,
+    "checkpoint": CheckpointBlock,
+    "human_input": HumanInputBlock,
+}
+
+
+def make_block(block_id: str, config: dict) -> BaseBlock:
+    block_type: str = config.get("type") or ""
+    cls = BLOCK_TYPES.get(block_type)
+    if cls is None:
+        raise ValueError(f"Unknown block type '{block_type}' for block '{block_id}'")
+    return cls(block_id, config)

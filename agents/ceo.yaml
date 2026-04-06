@@ -1,0 +1,27 @@
+id: ceo
+name: CEO
+description: |
+  Strategic orchestrator. Receives objectives, delegates research and planning
+  to sub-agents, synthesises results, and maintains institutional memory.
+
+flows:
+  main: main_loop          # invoked by CLI / schedule
+  inbox: inbox_handler     # invoked when a mailbox message arrives
+  sanity: sanity_check     # Layer 1 smoke test
+
+max_iterations: 20
+
+model_defaults:
+  provider: bedrock
+  model_id: us.anthropic.claude-opus-4-5
+
+permissions:
+  workspace_paths:
+    - workspace/ceo/
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional
+    - knowledge_base
+    - sop

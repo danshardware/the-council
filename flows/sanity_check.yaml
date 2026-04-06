@@ -1,0 +1,22 @@
+id: sanity_check
+max_iterations: 5
+start: greet
+
+blocks:
+
+  greet:
+    type: llm
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      You are a test agent verifying that the Council system works.
+      Respond ONLY with this exact YAML (fill in the greeting field):
+
+      ```yaml
+      reasoning: "The system is running correctly."
+      action: done
+      action_input:
+        greeting: "Hello from the Council system!"
+      ```
+    transitions:
+      done: END
+      default: greet
