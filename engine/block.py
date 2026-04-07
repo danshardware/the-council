@@ -23,6 +23,13 @@ class MaxIterationsError(Exception):
     pass
 
 
+class SuspendExecution(Exception):
+    """Raised by CheckpointBlock when the agent suspends to wait for an async reply."""
+    def __init__(self, checkpoint_path: str, msg: str = "") -> None:
+        super().__init__(msg)
+        self.checkpoint_path = checkpoint_path
+
+
 # ---------------------------------------------------------------------------
 # Base
 # ---------------------------------------------------------------------------
@@ -97,10 +104,17 @@ class LLMBlock(BaseBlock):
         shared["action"] = action
         shared["action_input"] = exec_res.get("action_input", {})
 
-        # Append LLM response to conversation history (raw YAML text)
+        # Append a clean human-readable summary so conversation history stays useful
         reasoning = exec_res.get("reasoning", "")
-        response_text = yaml.dump(exec_res, default_flow_style=False)
-        shared["messages"].append({"role": "assistant", "content": response_text})
+        summary = f"[{self.block_id}] action={action}"
+        if reasoning:
+            summary += f" | {reasoning[:300]}"
+        shared["messages"].append({"role": "assistant", "content": summary})
+
+        # Keep conversation history bounded to avoid context bloat (keep first user msg + last 11)
+        messages = shared["messages"]
+        if len(messages) > 12:
+            shared["messages"] = [messages[0]] + messages[-11:]
 
         self._log(
             shared,
@@ -234,7 +248,7 @@ class ToolCallBlock(BaseBlock):
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint block (Layer 1: just logs + continues; mailbox added in Layer 6)
+# Checkpoint block — persists state and optionally suspends the agent
 # ---------------------------------------------------------------------------
 
 class CheckpointBlock(BaseBlock):
@@ -242,20 +256,64 @@ class CheckpointBlock(BaseBlock):
         self._log(shared, "checkpoint", mode=self.config.get("mode", "noop"))
         return dict(shared)
 
-    def exec(self, prep_res: dict) -> None:
+    def exec(self, prep_res: dict) -> str | None:
+        mode = self.config.get("mode", "noop")
+        if mode in ("suspend", "delegate"):
+            from engine.state import save_checkpoint, checkpoint_path_for
+            cp_path = checkpoint_path_for(
+                prep_res.get("logs_dir", "logs"),
+                prep_res["agent_id"],
+                prep_res["session_id"],
+            )
+            save_checkpoint(prep_res, cp_path)
+            return str(cp_path)
         return None
 
-    def post(self, shared: dict, prep_res: dict, exec_res: Any) -> str:
+    def post(self, shared: dict, prep_res: dict, exec_res: str | None) -> str:
+        mode = self.config.get("mode", "noop")
+
+        if mode == "delegate" and exec_res:
+            target = self.config.get("delegate_to")
+            prompt = self.config.get("delegate_prompt") or shared.get("action_input", {}).get("task", "")
+            if target and prompt:
+                from engine.mailbox import Mailbox
+                mailbox = Mailbox()
+                mailbox.send(
+                    target_agent=target,
+                    prompt=str(prompt),
+                    from_agent=shared["agent_id"],
+                    from_session=shared["session_id"],
+                    reply_to_session=shared["session_id"],
+                )
+                _console.print(
+                    Panel(
+                        f"Delegated to [bold]{target}[/bold] — session suspended.\n"
+                        f"Checkpoint: {exec_res}",
+                        title="[yellow]Checkpoint / Delegate[/yellow]",
+                        border_style="yellow",
+                    )
+                )
+            raise SuspendExecution(checkpoint_path=exec_res, msg=f"Delegating to {target}")
+
+        if mode == "suspend" and exec_res:
+            _console.print(
+                Panel(
+                    f"Session suspended. Checkpoint saved:\n{exec_res}",
+                    title="[yellow]Checkpoint / Suspend[/yellow]",
+                    border_style="yellow",
+                )
+            )
+            raise SuspendExecution(checkpoint_path=exec_res, msg="Suspended")
+
+        # noop — just log and continue
         _console.print(
             Panel(
-                f"Checkpoint reached (mode: {self.config.get('mode', 'noop')}). "
-                "Mailbox suspension not yet implemented — continuing.",
+                "Checkpoint reached (noop) — continuing.",
                 title="[yellow]Checkpoint[/yellow]",
                 border_style="yellow",
             )
         )
-        on_timeout = self.config.get("on_timeout", "default")
-        return on_timeout
+        return self.config.get("on_timeout", "default")
 
 
 # ---------------------------------------------------------------------------

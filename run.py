@@ -1,9 +1,11 @@
 #!/usr/bin/env python
-"""Council CLI — run an agent from the command line.
+"""Council CLI — run an agent from the command line or start the scheduler daemon.
 
 Usage:
     uv run run.py --agent ceo --prompt "Develop a market entry strategy for Nigeria"
     uv run run.py --agent ceo --prompt "..." --flow inbox --session my-session-01
+    uv run run.py --daemon                   # start mailbox poller + scheduled jobs
+    uv run run.py --daemon --poll-seconds 5  # faster mailbox poll interval
 """
 
 import argparse
@@ -19,10 +21,24 @@ from engine.runner import AgentRunner
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="council",
-        description="Run a Council agent.",
+        description="Run a Council agent or start the scheduler daemon.",
     )
-    parser.add_argument("--agent", required=True, help="Agent ID (matches agents/<id>.yaml)")
-    parser.add_argument("--prompt", required=True, help="Initial prompt / task description")
+    # Daemon mode
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Start the scheduler daemon (mailbox poller + scheduled jobs). "
+             "Mutually exclusive with --agent.",
+    )
+    parser.add_argument(
+        "--poll-seconds",
+        type=int,
+        default=10,
+        help="Mailbox poll interval in seconds (daemon mode, default: 10)",
+    )
+    # Agent-run mode
+    parser.add_argument("--agent", help="Agent ID (matches agents/<id>.yaml)")
+    parser.add_argument("--prompt", help="Initial prompt / task description")
     parser.add_argument(
         "--flow",
         default="main",
@@ -40,6 +56,23 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.daemon:
+        from engine.scheduler import build_scheduler
+        from rich.console import Console
+        from rich.rule import Rule
+        Console().print(Rule("[bold green]Council Scheduler Daemon[/bold green]"))
+        scheduler = build_scheduler(blocking=True, mailbox_poll_seconds=args.poll_seconds)
+        try:
+            scheduler.start()
+        except (KeyboardInterrupt, SystemExit):
+            Console().print("\n[dim]Scheduler stopped.[/dim]")
+        return
+
+    if not args.agent:
+        parser.error("--agent is required unless --daemon is specified")
+    if not args.prompt:
+        parser.error("--prompt is required unless --daemon is specified")
 
     runner = AgentRunner(
         agent_id=args.agent,

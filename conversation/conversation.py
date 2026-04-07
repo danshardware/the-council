@@ -1,8 +1,15 @@
 from dataclasses import dataclass
 from typing import Callable
 import boto3
+from botocore.config import Config
 import inspect
 import json
+
+_BEDROCK_CONFIG = Config(
+    read_timeout=300,        # large model responses can be slow
+    connect_timeout=10,
+    retries={"max_attempts": 5, "mode": "adaptive"},
+)
 
 # Conversation class for interacting with various models via AWS Bedrock.
 
@@ -354,7 +361,7 @@ class Conversation:
         Raises:
             Various AWS Bedrock exceptions if the API call fails.
         """
-        bedrock_client = boto3.client(service_name='bedrock-runtime')
+        bedrock_client = boto3.client(service_name='bedrock-runtime', config=_BEDROCK_CONFIG)
         if messages is None:
             conversation = [m.to_dict() for m in self.conversation]
         else:
@@ -364,7 +371,7 @@ class Conversation:
         tool_config = {
             "tools": [
                 {
-                    "toolSpec": tool.to_bedrock_spec()
+                    "toolSpec": tool.tool_spec
                 } for tool in self.tools.values()
             ]
         }
@@ -412,9 +419,13 @@ class Conversation:
                         tool_result = self.invoke_tool(tool_name, **tool_input)
                     except Exception as e:
                         print(f"Error invoking tool {tool_name}: {e}")
-                        continue
-                    
-                    # Add the tool use request to the conversation
+                        tool_result = f"Error: {e}"
+
+                    # Bedrock requires json content to be a dict; use text for strings
+                    if isinstance(tool_result, dict):
+                        result_content = [{"json": tool_result}]
+                    else:
+                        result_content = [{"text": str(tool_result)}]
                     tool_use_message = Message(
                         role="assistant",
                         content=[{"toolUse": tool}]
@@ -430,7 +441,7 @@ class Conversation:
                         "content": [{
                             "toolResult": {
                                 "toolUseId": tool_use_id,
-                                "content": [{"json": tool_result}]
+                                "content": result_content
                             }
                         }]
                     }

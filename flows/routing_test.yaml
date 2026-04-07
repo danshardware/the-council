@@ -1,0 +1,70 @@
+id: routing_test
+max_iterations: 8
+start: think
+
+blocks:
+
+  think:
+    type: llm
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      You are a test agent. You have been given a task.
+      Decide what to do: either investigate further or conclude.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "brief reason"
+      action: investigate  # investigate | conclude
+      action_input:
+        detail: "what you want to investigate or your conclusion"
+      ```
+    transitions:
+      investigate: pre_guard
+      conclude: END
+      default: think
+
+  pre_guard:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      You are a safety reviewer. Will the following action result in ANY of:
+        - Spending real money
+        - Sending external communications
+        - Deleting files
+        - Irreversible system changes
+      Almost certainly this is safe research. Approve it.
+      Respond ONLY with valid YAML:
+      ```yaml
+      verdict: approved  # approved | needs_confirmation | rejected
+      reason: "brief reason"
+      ```
+    transitions:
+      approved: investigate
+      needs_confirmation: human_check
+      rejected: think
+
+  investigate:
+    type: llm
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      You are investigating a topic. Summarise what you found and decide if you need
+      to investigate more or are ready to conclude.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you found"
+      action: more  # more | conclude
+      action_input:
+        finding: "key finding"
+      ```
+    transitions:
+      more: think
+      conclude: END
+      default: think
+
+  human_check:
+    type: human_input
+    prompt: "Guardrail flagged this action. Approve? [y/n]: "
+    transitions:
+      approved: investigate
+      rejected: think

@@ -8,12 +8,13 @@ flows:
   main: main_loop          # invoked by CLI / schedule
   inbox: inbox_handler     # invoked when a mailbox message arrives
   sanity: sanity_check     # Layer 1 smoke test
+  routing_test: routing_test  # Layer 2 routing + guardrail test
 
 max_iterations: 20
 
 model_defaults:
   provider: bedrock
-  model_id: us.anthropic.claude-opus-4-5
+  model_id: us.anthropic.claude-opus-4-5-20251101-v1:0
 
 permissions:
   workspace_paths:

@@ -84,3 +84,16 @@ def _make_bedrock_tool(func: Callable, context: ToolContext) -> BedrockTool:
         },
     }
     return BedrockTool(wrapper, tool_spec=tool_spec)
+
+
+def _load_all_tools() -> None:
+    """Import all tool submodules so their @tool decorators register into _REGISTRY."""
+    import importlib
+    from pathlib import Path
+    tools_dir = Path(__file__).parent
+    for path in sorted(tools_dir.glob("*.py")):
+        if path.stem not in ("__init__",):
+            importlib.import_module(f"tools.{path.stem}")
+
+
+_load_all_tools()

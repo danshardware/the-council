@@ -9,7 +9,7 @@ import yaml
 from rich.console import Console
 from rich.rule import Rule
 
-from engine.block import MaxIterationsError
+from engine.block import MaxIterationsError, SuspendExecution
 from engine.flow_loader import load_flow
 from engine.logger import Logger
 from tools import ToolContext
@@ -72,6 +72,7 @@ class AgentRunner:
         shared: dict = {
             "agent_id": self.agent_id,
             "session_id": session_id,
+            "logs_dir": str(self.logs_dir),
             "agent_config": agent_config,
             "max_iterations": max_iterations,
             "iteration": 0,
@@ -112,6 +113,16 @@ class AgentRunner:
                 _console.print(
                     f"\n[bold red]Max iterations reached:[/bold red] {exc}"
                 )
+            except SuspendExecution as exc:
+                shared["logger"].log_event(
+                    shared, "session_suspended", checkpoint=exc.checkpoint_path
+                )
+                _console.print(
+                    f"\n[bold yellow]Session suspended.[/bold yellow] "
+                    f"Checkpoint: {exc.checkpoint_path}"
+                )
+                shared["suspended"] = True
+                shared["checkpoint_path"] = exc.checkpoint_path
             except Exception as exc:
                 shared["logger"].log_event(
                     shared, "unhandled_error", error=str(exc)
@@ -132,5 +143,5 @@ class AgentRunner:
         path = self.agents_dir / f"{self.agent_id}.yaml"
         if not path.exists():
             raise FileNotFoundError(f"Agent definition not found: {path}")
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             return yaml.safe_load(fh)

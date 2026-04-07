@@ -1,0 +1,146 @@
+id: main_loop
+max_iterations: 20
+start: think
+
+blocks:
+
+  think:
+    type: llm
+    model_id: us.anthropic.claude-opus-4-5-20251101-v1:0
+    system_prompt: |
+      You are the CEO. Your job is to drive improvements in your current company and
+      help the board implement their plans. Work closely with them to find the best
+      possible way to achieve their goals while remaining ethical. Your time is precious
+      so delegate any tasks you can and save your thinking power for things only you can do.
+
+      Review your current context and decide what to do next.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "your thinking"
+      action: delegate  # delegate | research | write_file | done
+      action_input:
+        # for delegate: target_agent, prompt, mode (sync|async)
+        # for research: topic, question
+        # for write_file: path, content
+        # for done: summary
+      ```
+    tools:
+      - search_memory
+      - read_file
+      - list_files
+    transitions:
+      delegate: pre_action_guard
+      research: research_block
+      write_file: write_file_block
+      done: END
+      default: think
+
+  pre_action_guard:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      You are a safety reviewer. Will the proposed action result in ANY of:
+        - Spending real money
+        - Sending external communications (email, SMS, webhooks to outside systems)
+        - Deleting files permanently
+        - Irreversible system changes
+      Spawning a sub-agent or writing internal files does NOT qualify.
+      Respond ONLY with valid YAML:
+      ```yaml
+      verdict: approved  # approved | needs_confirmation | rejected
+      reason: "brief reason"
+      ```
+    transitions:
+      approved: delegate_block
+      needs_confirmation: human_checkpoint
+      rejected: think
+
+  human_checkpoint:
+    type: human_input
+    prompt: "Agent requires confirmation before proceeding. Approve? [y/n]: "
+    transitions:
+      approved: delegate_block
+      rejected: think
+
+  delegate_block:
+    type: llm
+    model_id: us.anthropic.claude-opus-4-5-20251101-v1:0
+    system_prompt: |
+      Compose the delegation. Decide whether to spawn synchronously (you need the result
+      now) or send async (fire-and-forget).
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "why sync or async"
+      action: sync_spawn  # sync_spawn | async_send
+      action_input:
+        target_agent: "researcher"
+        prompt: "clear task description"
+      ```
+    transitions:
+      sync_spawn: spawn_block
+      async_send: send_block
+      done: END
+      default: delegate_block
+
+  spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: post_action_guard
+
+  send_block:
+    type: tool_call
+    tool: send_message
+    transitions:
+      default: checkpoint_and_suspend
+
+  checkpoint_and_suspend:
+    type: checkpoint
+    mode: mailbox
+    timeout_hours: 24
+    on_timeout: think
+
+  post_action_guard:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      Review this tool result. Did anything unexpected or concerning happen?
+      Respond ONLY with valid YAML:
+      ```yaml
+      verdict: approved  # approved | flagged
+      reason: "brief reason"
+      ```
+    transitions:
+      approved: think
+      flagged: human_checkpoint
+
+  research_block:
+    type: llm
+    model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    system_prompt: |
+      Research the given topic using available tools. Store any useful findings in memory.
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you found"
+      action: store  # store | done
+      action_input:
+        content: "finding to store"
+        topic: "topic tag"
+        realm: institutional  # institutional | knowledge_base | sop
+      ```
+    tools:
+      - search_memory
+      - read_file
+      - store_memory
+    transitions:
+      store: think
+      done: think
+      default: think
+
+  write_file_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: post_action_guard

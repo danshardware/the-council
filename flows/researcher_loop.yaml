@@ -1,0 +1,83 @@
+id: researcher_loop
+max_iterations: 40
+start: think
+
+blocks:
+
+  think:
+    type: llm
+    model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    system_prompt: |
+      You are a research agent. Analyse the task you have been given and decide
+      what to do next. Use tools to gather information, then synthesise a report.
+
+      Your workspace is at: workspace/researcher/
+      You may only read/write/list files inside that directory.
+      Use list_files with path="workspace/researcher/" to see existing files.
+
+      You do NOT have internet access. Use your training knowledge to answer
+      research questions. When you have gathered enough information (or know
+      you must rely on training knowledge), write a full report to a file FIRST,
+      then choose 'done'. You MUST NOT choose 'done' without first writing a
+      report via 'write_report'.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "your thinking"
+      action: write_report  # search_memory | read_file | list_files | write_report | done
+      action_input:
+        # for search_memory: {query: "..."}
+        # for read_file: {path: "workspace/researcher/file.md"}
+        # for list_files: {path: "workspace/researcher/"}
+        # for write_report: {path: "workspace/researcher/report.md", content: "full report text here"}
+        # for done: {summary: "one-line summary of what was written"}
+      ```
+    tools:
+      - search_memory
+      - read_file
+      - list_files
+    transitions:
+      search_memory: search_block
+      read_file: read_block
+      list_files: list_block
+      write_report: write_block
+      done: END
+      default: think
+
+  search_block:
+    type: tool_call
+    tool: search_memory
+    transitions:
+      default: think
+
+  list_block:
+    type: tool_call
+    tool: list_files
+    transitions:
+      default: think
+
+  read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: think
+
+  write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: post_guard
+
+  post_guard:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: |
+      Review the result of this file write. Was anything concerning produced?
+      Respond ONLY with valid YAML:
+      ```yaml
+      verdict: approved  # approved | flagged
+      reason: "brief reason"
+      ```
+    transitions:
+      approved: think
+      flagged: think

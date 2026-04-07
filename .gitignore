@@ -11,4 +11,6 @@ wheels/
 
 # Files in use when running or testing
 logs/
-memory/
+workspace/
+memory_db/
+messages/

@@ -11,7 +11,7 @@ class Logger:
         self.session_id = session_id
         log_dir = Path(logs_dir) / agent_id
         log_dir.mkdir(parents=True, exist_ok=True)
-        self._fh = open(log_dir / f"{session_id}.jsonl", "a", buffering=1)
+        self._fh = open(log_dir / f"{session_id}.jsonl", "a", buffering=1, encoding="utf-8")
 
     def log_event(self, shared: dict, event: str, **kwargs: Any) -> None:
         record = {

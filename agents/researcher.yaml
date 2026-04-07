@@ -1,0 +1,25 @@
+id: researcher
+name: Researcher
+description: |
+  General-purpose research agent. Receives a scoped task, gathers information
+  using available tools, synthesises findings, and returns a structured report.
+
+flows:
+  main: researcher_loop
+  inbox: researcher_loop
+
+max_iterations: 15
+
+model_defaults:
+  provider: bedrock
+  model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+permissions:
+  workspace_paths:
+    - workspace/researcher/
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional
+    - knowledge_base

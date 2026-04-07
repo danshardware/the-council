@@ -9,9 +9,15 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pocketflow import Flow
+from pocketflow import Flow, Node
 from engine.block import make_block, BaseBlock
 
+
+class _EndNode(Node):
+    """Silent terminal node — has no successors so PocketFlow stops without warning."""
+    def prep(self, shared): return None
+    def exec(self, prep_res): return None
+    def post(self, shared, prep_res, exec_res): return "end"
 
 def load_flow(flow_path: str | Path) -> tuple[Flow, dict]:
     """
@@ -30,7 +36,7 @@ def load_flow(flow_path: str | Path) -> tuple[Flow, dict]:
     Transitions mapped to "END" (or absent) cause the flow to terminate naturally.
     """
     path = Path(flow_path)
-    with path.open() as fh:
+    with path.open(encoding="utf-8") as fh:
         flow_config: dict = yaml.safe_load(fh)
 
     blocks_config: dict = flow_config.get("blocks", {})
@@ -40,18 +46,23 @@ def load_flow(flow_path: str | Path) -> tuple[Flow, dict]:
     for block_id, block_cfg in blocks_config.items():
         block_instances[block_id] = make_block(block_id, block_cfg)
 
+# Shared silent end sentinel — routes every explicit END transition through it
+    # so PocketFlow terminates without emitting a "Flow ends" warning.
+    end_sentinel = _EndNode()
+
     # Wire transitions
     for block_id, block_cfg in blocks_config.items():
         node = block_instances[block_id]
         for action, target in block_cfg.get("transitions", {}).items():
-            if target and target.upper() != "END":
+            if not target or target.upper() == "END":
+                node.next(end_sentinel, action)  # silent terminal
+            else:
                 if target not in block_instances:
                     raise ValueError(
                         f"Flow '{flow_config.get('id')}': block '{block_id}' "
                         f"transition '{action}' points to unknown block '{target}'"
                     )
                 node.next(block_instances[target], action)
-            # "END" (or missing) → no successor registered → flow terminates
 
     start_id = flow_config.get("start")
     if start_id not in block_instances:
