@@ -6,14 +6,10 @@ blocks:
 
   think:
     type: llm
-    model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    model_id: us.anthropic.claude-haiku-4-5-20250929-v1:0
     system_prompt: |
       You are a research agent. Analyse the task you have been given and decide
       what to do next. Use tools to gather information, then synthesise a report.
-
-      Your workspace is at: workspace/researcher/
-      You may only read/write/list files inside that directory.
-      Use list_files with path="workspace/researcher/" to see existing files.
 
       You do NOT have internet access. Use your training knowledge to answer
       research questions. When you have gathered enough information (or know
@@ -26,9 +22,6 @@ blocks:
       reasoning: "your thinking"
       action: write_report  # search_memory | read_file | list_files | write_report | done
       action_input:
-        # for search_memory: {query: "..."}
-        # for read_file: {path: "workspace/researcher/file.md"}
-        # for list_files: {path: "workspace/researcher/"}
         # for write_report: {path: "workspace/researcher/report.md", content: "full report text here"}
         # for done: {summary: "one-line summary of what was written"}
       ```

@@ -22,13 +22,13 @@ blocks:
       action_input:
         # for delegate: target_agent, prompt, mode (sync|async)
         # for research: topic, question
-        # for write_file: path, content
         # for done: summary
       ```
     tools:
       - search_memory
       - read_file
       - list_files
+      - write_file
     transitions:
       delegate: pre_action_guard
       research: research_block
