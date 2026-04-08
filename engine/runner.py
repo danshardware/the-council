@@ -81,6 +81,7 @@ class AgentRunner:
             "action_input": {},
             "messages": [{"role": "user", "content": prompt}],
             "initial_prompt": prompt,
+            "context_injection": _load_context_files(agent_config),
             "logger": Logger(str(self.logs_dir), self.agent_id, session_id),
             "tool_context": ToolContext(
                 agent_id=self.agent_id,
@@ -145,3 +146,33 @@ class AgentRunner:
             raise FileNotFoundError(f"Agent definition not found: {path}")
         with path.open(encoding="utf-8") as fh:
             return yaml.safe_load(fh)
+
+
+def _load_context_files(agent_config: dict) -> str:
+    """Read files matching context_files globs from agent config and return XML-tagged blocks."""
+    import glob as _glob
+    entries: list[dict] = agent_config.get("context_files", [])
+    if not entries:
+        return ""
+    parts: list[str] = []
+    for entry in entries:
+        pattern = entry.get("glob", "")
+        tag = entry.get("tag", "context")
+        if not pattern:
+            continue
+        matched = sorted(_glob.glob(pattern, recursive=True))
+        if not matched:
+            continue
+        chunks: list[str] = []
+        for fpath in matched:
+            try:
+                with open(fpath, encoding="utf-8") as fh:
+                    chunks.append(fh.read().strip())
+            except UnicodeDecodeError:
+                with open(fpath, encoding="latin-1") as fh:
+                    chunks.append(fh.read().strip())
+            except OSError:
+                pass
+        if chunks:
+            parts.append(f"<{tag}>\n" + "\n\n".join(chunks) + f"\n</{tag}>")
+    return "\n\n".join(parts)

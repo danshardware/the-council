@@ -405,13 +405,14 @@ class Conversation:
 
         # Handle tool use
         if response.get('stopReason') == 'tool_use':
-            print("Model requested tool use.")
             tool_requests = response['output']['message']['content']
             for tool_request in tool_requests:
                 if 'toolUse' in tool_request:
                     tool = tool_request['toolUse']
                     tool_name = tool['name']
                     tool_input = tool['input']
+                    from rich.console import Console as _RC
+                    _RC().print(f"  [dim]🔧 tool use → {tool_name}[/dim]")
                     tool_use_id = tool['toolUseId']
 
                     # Call the tool

@@ -85,13 +85,52 @@ class LLMBlock(BaseBlock):
         return dict(shared)  # pass a snapshot
 
     def exec(self, prep_res: dict) -> dict:
+        import sys
         messages = list(prep_res.get("messages", []))
-        parsed, in_tok, out_tok = call_llm(
-            model_id=self._model_id,
-            system_prompt=self.config["system_prompt"],
-            messages=messages,
-            tools=self._tools or None,
-        )
+        system_prompt = self.config["system_prompt"]
+
+        # Prepend shared context blocks (from agent context_files)
+        context_injection: str = prep_res.get("context_injection", "")
+        if context_injection:
+            system_prompt = context_injection.rstrip() + "\n\n" + system_prompt
+
+        # Inject workspace paths so agent knows where it can write
+        allowed_paths = prep_res.get("tool_context") and prep_res["tool_context"].allowed_paths
+        if allowed_paths:
+            paths_str = ", ".join(f"`{p}`" for p in allowed_paths)
+            system_prompt = system_prompt.rstrip() + f"\n\nYour allowed workspace paths: {paths_str}\n"
+
+        # Auto-inject tool schema section so agent knows available tool signatures
+        if self._tools:
+            lines = ["\n## Available Tools"]
+            for bt in self._tools:
+                spec = bt.tool_spec
+                props = spec.get("inputSchema", {}).get("json", {}).get("properties", {})
+                params = ", ".join(
+                    f"{k}: {v.get('type', 'string')}" for k, v in props.items()
+                )
+                lines.append(f"- **{spec['name']}**({params}) — {spec.get('description', '')}")
+            system_prompt = system_prompt.rstrip() + "\n" + "\n".join(lines) + "\n"
+
+        is_tty = sys.stdout.isatty()
+        if is_tty:
+            with _console.status(
+                f"[dim]⏳ {self.block_id} → {self._model_id.split('.')[-1]}…[/dim]",
+                spinner="dots",
+            ):
+                parsed, in_tok, out_tok = call_llm(
+                    model_id=self._model_id,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tools=self._tools or None,
+                )
+        else:
+            parsed, in_tok, out_tok = call_llm(
+                model_id=self._model_id,
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=self._tools or None,
+            )
         parsed["_in_tokens"] = in_tok
         parsed["_out_tokens"] = out_tok
         return parsed
@@ -120,6 +159,7 @@ class LLMBlock(BaseBlock):
             shared,
             "llm_call",
             model=self._model_id,
+            action=action,
             input_tokens=in_tok,
             output_tokens=out_tok,
         )
@@ -129,10 +169,10 @@ class LLMBlock(BaseBlock):
             Panel(
                 Text.from_markup(
                     f"[bold cyan]{self.block_id}[/bold cyan]  "
-                    f"[yellow]action:[/yellow] {action}\n"
+                    f"[yellow]→[/yellow] [bold white]{action}[/bold white]\n"
                     f"[dim]{reasoning[:200]}[/dim]"
                 ),
-                title=f"[green]LLM[/green] • iter {shared['iteration']}",
+                title=f"🤖 LLM • iter {shared['iteration']}",
                 border_style="green",
             )
         )
@@ -151,17 +191,29 @@ class GuardrailBlock(BaseBlock):
         return dict(shared)
 
     def exec(self, prep_res: dict) -> dict:
+        import sys
         action = prep_res.get("action", "")
         action_input = prep_res.get("action_input", {})
         user_msg = (
             f"Proposed action: {action}\n"
             f"Action input:\n{yaml.dump(action_input, default_flow_style=False)}"
         )
-        parsed, in_tok, out_tok = call_llm(
-            model_id=self._model_id,
-            system_prompt=self.config["system_prompt"],
-            messages=[{"role": "user", "content": user_msg}],
-        )
+        if sys.stdout.isatty():
+            with _console.status(
+                f"[dim]⏳ {self.block_id} → reviewing '{action}'…[/dim]",
+                spinner="dots",
+            ):
+                parsed, in_tok, out_tok = call_llm(
+                    model_id=self._model_id,
+                    system_prompt=self.config["system_prompt"],
+                    messages=[{"role": "user", "content": user_msg}],
+                )
+        else:
+            parsed, in_tok, out_tok = call_llm(
+                model_id=self._model_id,
+                system_prompt=self.config["system_prompt"],
+                messages=[{"role": "user", "content": user_msg}],
+            )
         parsed["_in_tokens"] = in_tok
         parsed["_out_tokens"] = out_tok
         return parsed
@@ -192,11 +244,14 @@ class GuardrailBlock(BaseBlock):
                 ),
             })
 
+        reviewing_action = prep_res.get("action", "?")
         style = "green" if verdict == "approved" else "red"
+        emoji = "✅" if verdict == "approved" else "🚫"
         _console.print(
             Panel(
-                f"[bold]{verdict}[/bold] — {reason}",
-                title=f"[{style}]Guardrail • {self.block_id}[/{style}]",
+                f"[dim]reviewing:[/dim] [yellow]{reviewing_action}[/yellow]\n"
+                f"{emoji} [bold]{verdict}[/bold] — {reason}",
+                title=f"🛡️  Guardrail • {self.block_id}",
                 border_style=style,
             )
         )
@@ -239,8 +294,9 @@ class ToolCallBlock(BaseBlock):
         })
         _console.print(
             Panel(
-                f"[bold]{exec_res['tool']}[/bold] → {str(exec_res['result'])[:300]}",
-                title="[blue]Tool Call[/blue]",
+                f"[bold]{exec_res['tool']}[/bold] [dim]({exec_res['duration_ms']}ms)[/dim]\n"
+                f"[dim]{str(exec_res['result'])[:300]}[/dim]",
+                title=f"🔧 Tool",
                 border_style="blue",
             )
         )
@@ -289,7 +345,7 @@ class CheckpointBlock(BaseBlock):
                     Panel(
                         f"Delegated to [bold]{target}[/bold] — session suspended.\n"
                         f"Checkpoint: {exec_res}",
-                        title="[yellow]Checkpoint / Delegate[/yellow]",
+                        title="📬  Checkpoint / Delegate",
                         border_style="yellow",
                     )
                 )
@@ -299,7 +355,7 @@ class CheckpointBlock(BaseBlock):
             _console.print(
                 Panel(
                     f"Session suspended. Checkpoint saved:\n{exec_res}",
-                    title="[yellow]Checkpoint / Suspend[/yellow]",
+                    title="💾  Checkpoint / Suspend",
                     border_style="yellow",
                 )
             )
@@ -309,7 +365,7 @@ class CheckpointBlock(BaseBlock):
         _console.print(
             Panel(
                 "Checkpoint reached (noop) — continuing.",
-                title="[yellow]Checkpoint[/yellow]",
+                title="💾  Checkpoint",
                 border_style="yellow",
             )
         )
@@ -327,7 +383,7 @@ class HumanInputBlock(BaseBlock):
 
     def exec(self, prep_res: dict) -> str:
         prompt = self.config.get("prompt", "Agent requires input [y/n]: ")
-        _console.print(f"\n[bold magenta]Human Input Required:[/bold magenta] {prompt}", end="")
+        _console.print(f"\n🧑  [bold magenta]Human Input Required:[/bold magenta] {prompt}", end="")
         response = input().strip().lower()
         return response
 

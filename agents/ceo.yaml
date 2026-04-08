@@ -26,3 +26,9 @@ memory:
     - institutional
     - knowledge_base
     - sop
+
+context_files:
+  - glob: "shared_knowledge/company/**/*.md"
+    tag: "company_info"
+  - glob: "shared_knowledge/financial/**/*.md"
+    tag: "financial_context"

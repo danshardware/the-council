@@ -23,3 +23,7 @@ memory:
   realms:
     - institutional
     - knowledge_base
+
+context_files:
+  - glob: "shared_knowledge/company/**/*.md"
+    tag: "company_info"

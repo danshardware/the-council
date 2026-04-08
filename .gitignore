@@ -14,3 +14,4 @@ logs/
 workspace/
 memory_db/
 messages/
+shared_knowledge/
