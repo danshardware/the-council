@@ -139,6 +139,13 @@ class LLMBlock(BaseBlock):
         action = exec_res.get("action", "default")
         in_tok = exec_res.pop("_in_tokens", 0)
         out_tok = exec_res.pop("_out_tokens", 0)
+        raw_response = exec_res.pop("_raw_response", "")
+        tool_calls = exec_res.pop("_tool_calls", [])
+
+        # Log any tool calls that happened inside this LLM turn
+        for tc in tool_calls:
+            self._log(shared, "tool_use", tool=tc["tool"],
+                      input=tc["input"], result=tc["result"])
 
         shared["action"] = action
         shared["action_input"] = exec_res.get("action_input", {})
@@ -148,6 +155,9 @@ class LLMBlock(BaseBlock):
         summary = f"[{self.block_id}] action={action}"
         if reasoning:
             summary += f" | {reasoning[:300]}"
+        elif raw_response and action == "default":
+            # Parsing failed — include raw text so next iteration has some context
+            summary += f" | (unparsed) {raw_response[:300]}"
         shared["messages"].append({"role": "assistant", "content": summary})
 
         # Keep conversation history bounded to avoid context bloat (keep first user msg + last 11)
@@ -162,6 +172,7 @@ class LLMBlock(BaseBlock):
             action=action,
             input_tokens=in_tok,
             output_tokens=out_tok,
+            raw_response=raw_response[:2000],
         )
         self._log(shared, "transition", from_block=self.block_id, to_action=action)
 
@@ -398,6 +409,34 @@ class HumanInputBlock(BaseBlock):
 
 
 # ---------------------------------------------------------------------------
+# Human-reply block — free-text round-trip with the user
+# ---------------------------------------------------------------------------
+
+class HumanReplyBlock(BaseBlock):
+    """Displays the agent's message and reads a free-text reply from the user."""
+
+    def prep(self, shared: dict) -> dict:
+        self._log(shared, "human_input_requested")
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> str:
+        action_input = prep_res.get("action_input", {})
+        if isinstance(action_input, dict):
+            message = action_input.get("message", "")
+        else:
+            message = str(action_input)
+        if message:
+            _console.print(f"\n🤖 [bold cyan]Agent:[/bold cyan] {message}")
+        _console.print("🧑  [bold magenta]You:[/bold magenta] ", end="")
+        return input().strip()
+
+    def post(self, shared: dict, prep_res: dict, exec_res: str) -> str:
+        self._log(shared, "human_reply", text=exec_res)
+        shared["messages"].append({"role": "user", "content": f"[HUMAN] {exec_res}"})
+        return "replied"
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -407,6 +446,7 @@ BLOCK_TYPES = {
     "tool_call": ToolCallBlock,
     "checkpoint": CheckpointBlock,
     "human_input": HumanInputBlock,
+    "human_reply": HumanReplyBlock,
 }
 
 

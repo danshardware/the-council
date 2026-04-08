@@ -342,7 +342,7 @@ class Conversation:
             raise ValueError(f"Tool '{tool_name}' is not registered.")
         return self.tools[tool_name](*args, **kwargs)
 
-    def call_model(self, messages: list[Message] | None = None) -> tuple[str, str]:
+    def call_model(self, messages: list[Message] | None = None, tool_event_log: list | None = None) -> tuple[str, str]:
         """Call the AWS Bedrock API with the current conversation.
         
         Makes an API call to the configured Bedrock model, handling tool use if the model
@@ -422,6 +422,13 @@ class Conversation:
                         print(f"Error invoking tool {tool_name}: {e}")
                         tool_result = f"Error: {e}"
 
+                    if tool_event_log is not None:
+                        tool_event_log.append({
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "result": str(tool_result)[:500],
+                        })
+
                     # Bedrock requires json content to be a dict; use text for strings
                     if isinstance(tool_result, dict):
                         result_content = [{"json": tool_result}]
@@ -457,7 +464,7 @@ class Conversation:
                         self.conversation.append(tool_result_message_obj)
 
                     # call ourselves again with the updated conversation
-                    return self.call_model()
+                    return self.call_model(tool_event_log=tool_event_log)
 
         # Continue the conversation
         token_usage = response['usage']

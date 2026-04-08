@@ -68,6 +68,16 @@ class AgentRunner:
         flow_max = flow_config.get("max_iterations", 25)
         max_iterations = min(agent_max, flow_max)
 
+        # Session-scoped workspace: workspace/ceo/ → workspace/ceo/<session_id>/
+        # This prevents file clashes when the same agent runs concurrently.
+        _base_paths = agent_config.get("permissions", {}).get("workspace_paths", [])
+        session_workspace_paths = [
+            str(Path(p.rstrip("/")) / session_id) + "/"
+            for p in _base_paths
+        ]
+        for _sp in session_workspace_paths:
+            Path(_sp).mkdir(parents=True, exist_ok=True)
+
         # Build shared state
         shared: dict = {
             "agent_id": self.agent_id,
@@ -86,9 +96,7 @@ class AgentRunner:
             "tool_context": ToolContext(
                 agent_id=self.agent_id,
                 session_id=session_id,
-                allowed_paths=agent_config.get("permissions", {}).get(
-                    "workspace_paths", []
-                ),
+                allowed_paths=session_workspace_paths,
                 allowed_commands=agent_config.get("permissions", {}).get(
                     "allowed_commands", []
                 ),

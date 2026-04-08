@@ -72,8 +72,11 @@ def _call_once(
         else:
             conv.conversation.append(Message(msg["role"], content=content))
 
-    _role, text = conv.call_model()
+    tool_calls: list = []
+    _role, text = conv.call_model(tool_event_log=tool_calls)
     parsed = _parse_yaml_response(text)
+    parsed["_raw_response"] = text
+    parsed["_tool_calls"] = tool_calls
     return parsed, conv.input_tokens, conv.output_tokens
 
 

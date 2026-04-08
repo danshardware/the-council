@@ -1,61 +1,143 @@
 id: researcher_loop
-max_iterations: 40
-start: think
+max_iterations: 60
+start: elaborate
 
 blocks:
 
-  think:
-    type: llm
-    model_id: us.anthropic.claude-haiku-4-5-20250929-v1:0
-    system_prompt: |
-      You are a research agent. Analyse the task you have been given and decide
-      what to do next. Use tools to gather information, then synthesise a report.
+  # ── Phase 1: Decompose the question into a structured plan ──────────────────
 
-      You do NOT have internet access. Use your training knowledge to answer
-      research questions. When you have gathered enough information (or know
-      you must rely on training knowledge), write a full report to a file FIRST,
-      then choose 'done'. You MUST NOT choose 'done' without first writing a
-      report via 'write_report'.
+  elaborate:
+    type: llm
+    system_prompt: |
+      You are a research agent. Your first task is to produce a structured research plan.
+
+      1. Elaborate on the question: define key terms, clarify scope, identify angles and perspectives.
+      2. Generate 3-5 focused subquestions that together provide comprehensive coverage.
+         Each subquestion must be specific and independently answerable.
+
+      Save the plan as plan.md inside your workspace path (shown below).
 
       Respond ONLY with valid YAML:
       ```yaml
-      reasoning: "your thinking"
-      action: write_report  # search_memory | read_file | list_files | write_report | done
+      reasoning: "your elaboration of the question and rationale for the subquestions chosen"
+      action: write_plan
       action_input:
-        # for write_report: {path: "workspace/researcher/report.md", content: "full report text here"}
-        # for done: {summary: "one-line summary of what was written"}
+        path: "<your_workspace>/plan.md"   # substitute <your_workspace> with your actual workspace path
+        content: |
+          # Research Plan
+          ## Question
+          [restate the question verbatim]
+          ## Elaboration
+          [scope, key terms, angles, perspectives]
+          ## Subquestions
+          1. [subquestion 1]
+          2. [subquestion 2]
+          3. [subquestion 3]
+      ```
+    transitions:
+      write_plan: write_plan_block
+      default: elaborate
+
+  write_plan_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: research
+
+  # ── Phase 2: Iterative per-subquestion research ─────────────────────────────
+
+  research:
+    type: llm
+    model_id: us.anthropic.claude-haiku-4-5-20250929-v1:0
+    system_prompt: |
+      You are a research agent working through a structured research plan.
+
+      Workflow — repeat until all subquestions are covered:
+      1. Read your plan to see all subquestions (plan.md in your workspace).
+      2. Read your notes to see findings so far (notes.md — may not exist yet on first pass).
+      3. Pick the next subquestion that does not yet have findings in your notes.
+      4. Search memory for relevant information on that subquestion.
+      5. Write back the full accumulated notes — overwrite notes.md with all content including
+         the new findings under a ## Subquestion N heading.
+      6. Once every subquestion has a findings section in your notes, choose 'synthesise'.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "which subquestion you are working on and what you are doing"
+      action: search_memory  # search_memory | read_file | write_file | synthesise
+      action_input:
+        # search_memory: {query: "search terms for this subquestion"}
+        # read_file:     {path: "<your_workspace>/plan.md"}   or   {path: "<your_workspace>/notes.md"}
+        # write_file:    {path: "<your_workspace>/notes.md", content: "full accumulated notes"}
+        # synthesise:    {}
       ```
     tools:
       - search_memory
       - read_file
-      - list_files
+      - write_file
     transitions:
       search_memory: search_block
       read_file: read_block
-      list_files: list_block
-      write_report: write_block
-      done: END
-      default: think
+      write_file: write_notes_block
+      synthesise: synthesise
+      default: research
 
   search_block:
     type: tool_call
     tool: search_memory
     transitions:
-      default: think
-
-  list_block:
-    type: tool_call
-    tool: list_files
-    transitions:
-      default: think
+      default: research
 
   read_block:
     type: tool_call
     tool: read_file
     transitions:
-      default: think
+      default: research
 
-  write_block:
+  write_notes_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: research
+
+  # ── Phase 3: Synthesise findings into a final report ────────────────────────
+
+  synthesise:
+    type: llm
+    system_prompt: |
+      You are a research agent. All subquestions have been researched.
+
+      Read your notes (notes.md in your workspace) then write a comprehensive
+      final report to report.md in your workspace that includes:
+        - Introduction framing the research question
+        - One section per subquestion with its findings
+        - A synthesis section drawing connections across subquestions
+        - A conclusion directly answering the main question
+        - Acknowledgement of limitations and areas of uncertainty
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "key findings and report structure"
+      action: read_file  # read_file | write_file
+      action_input:
+        # read_file:  {path: "<your_workspace>/notes.md"}
+        # write_file: {path: "<your_workspace>/report.md", content: "full report"}
+      ```
+    tools:
+      - read_file
+      - write_file
+    transitions:
+      read_file: read_for_synth_block
+      write_file: write_report_block
+      default: synthesise
+
+  read_for_synth_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: synthesise
+
+  write_report_block:
     type: tool_call
     tool: write_file
     transitions:
@@ -65,12 +147,13 @@ blocks:
     type: guardrail
     model_id: us.amazon.nova-lite-v1:0
     system_prompt: |
-      Review the result of this file write. Was anything concerning produced?
+      Review the research report just written. Was anything concerning or unsafe produced?
       Respond ONLY with valid YAML:
       ```yaml
       verdict: approved  # approved | flagged
       reason: "brief reason"
       ```
     transitions:
-      approved: think
-      flagged: think
+      approved: END
+      flagged: synthesise
+      default: END

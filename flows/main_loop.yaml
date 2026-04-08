@@ -18,10 +18,11 @@ blocks:
       Respond ONLY with valid YAML:
       ```yaml
       reasoning: "your thinking"
-      action: delegate  # delegate | research | write_file | done
+      action: delegate  # delegate | research | write_file | ask_human | done
       action_input:
         # for delegate: target_agent, prompt, mode (sync|async)
         # for research: topic, question
+        # for ask_human: message (the text to show the user)
         # for done: summary
       ```
     tools:
@@ -33,6 +34,7 @@ blocks:
       delegate: pre_action_guard
       research: research_block
       write_file: write_file_block
+      ask_human: ask_human_block
       done: END
       default: think
 
@@ -65,7 +67,7 @@ blocks:
 
   delegate_block:
     type: llm
-    model_id: us.anthropic.claude-opus-4-5-20251101-v1:0
+    model_id: us.anthropic.claude-haiku-4-5-20250929-v1:0
     system_prompt: |
       Compose the delegation. Decide whether to spawn synchronously (you need the result
       now) or send async (fire-and-forget).
@@ -118,7 +120,7 @@ blocks:
 
   research_block:
     type: llm
-    model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    model_id: us.anthropic.claude-haiku-4-5-20250929-v1:0
     system_prompt: |
       Research the given topic using available tools. Store any useful findings in memory.
       Respond ONLY with valid YAML:
@@ -144,3 +146,8 @@ blocks:
     tool: write_file
     transitions:
       default: post_action_guard
+
+  ask_human_block:
+    type: human_reply
+    transitions:
+      replied: think

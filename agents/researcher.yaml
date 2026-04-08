@@ -8,7 +8,7 @@ flows:
   main: researcher_loop
   inbox: researcher_loop
 
-max_iterations: 15
+max_iterations: 60
 
 model_defaults:
   provider: bedrock
