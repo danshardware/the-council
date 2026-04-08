@@ -22,7 +22,7 @@ def _get_store() -> MemoryStore:
 
 @tool
 def store_memory(content: str, topic: str, realm: str, context: ToolContext) -> str:
-    """Store a piece of information in shared memory with a topic and realm tag. Realms: knowledge_base | institutional | sop"""
+    """Store a piece of information in shared memory with a topic and realm tag. Realms: knowledge_base | institutional | sop | agent_facts"""
     doc_id = _get_store().store(
         content=content,
         topic=topic,

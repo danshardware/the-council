@@ -12,7 +12,7 @@ import boto3
 import chromadb
 from chromadb import EmbeddingFunction, Embeddings
 
-_REALMS = ("knowledge_base", "institutional", "sop")
+_REALMS = ("knowledge_base", "institutional", "sop", "agent_facts")
 _DEFAULT_N_RESULTS = 10
 
 

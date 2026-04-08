@@ -10,6 +10,8 @@ flows:
   sanity: sanity_check     # Layer 1 smoke test
   routing_test: routing_test  # Layer 2 routing + guardrail test
 
+post_session_flow: true  # run summarisation + fact extraction after every main session
+
 max_iterations: 20
 
 model_defaults:

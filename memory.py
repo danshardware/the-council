@@ -6,6 +6,7 @@ Commands:
     list    List stored documents (with optional filters)
     add     Add a single document interactively
     search  Semantic search across memory
+    show    Display a single document in full (no truncation)
     edit    Update document content by ID
     delete  Delete a document by ID
     import  Import files via the PocketFlow pipeline
@@ -14,6 +15,7 @@ Usage examples:
     uv run memory.py list --realm knowledge_base
     uv run memory.py add --topic "product roadmap" --realm institutional
     uv run memory.py search "quarterly revenue targets"
+    uv run memory.py show <doc_id> --realm institutional
     uv run memory.py edit <doc_id> --realm knowledge_base
     uv run memory.py delete <doc_id> --realm knowledge_base
     uv run memory.py import docs/ --topic "api reference" --realm knowledge_base
@@ -250,6 +252,51 @@ def cmd_search(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+
+def cmd_show(args: argparse.Namespace) -> None:
+    """Display a single document in full, without truncation."""
+    store = _get_store()
+
+    realm = args.realm
+    if realm not in _REALMS:
+        console.print(f"[red]Invalid realm '{realm}'. Must be one of: {list(_REALMS)}[/red]")
+        sys.exit(1)
+
+    full_id = _resolve_doc_id(store, args.doc_id, realm)
+    if not full_id:
+        console.print(f"[red]Document '{args.doc_id}' not found in realm '{realm}'.[/red]")
+        sys.exit(1)
+
+    col = store._collections[realm]
+    result = col.get(ids=[full_id], include=["documents", "metadatas"])
+    if not result["ids"]:
+        console.print(f"[red]Document '{full_id}' not found.[/red]")
+        sys.exit(1)
+
+    meta = result["metadatas"][0] if result["metadatas"] else {}
+    content = result["documents"][0] if result["documents"] else ""
+
+    # Metadata header table
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_column(style="dim", width=12)
+    t.add_column()
+    t.add_row("ID", f"[bold]{full_id}[/bold]")
+    t.add_row("Realm", str(meta.get("realm", realm)))
+    t.add_row("Topic", f"[yellow]{meta.get('topic', '')}[/yellow]")
+    t.add_row("Agent", str(meta.get("agent_id", "")))
+    t.add_row("Session", str(meta.get("session_id", "")))
+    t.add_row("Timestamp", str(meta.get("timestamp", ""))[:19])
+    if meta.get("keywords"):
+        t.add_row("Keywords", str(meta["keywords"]))
+    console.print(t)
+    console.print()
+    console.print(Panel(content, title=f"[bold]{full_id[:8]}[/bold] — {meta.get('topic','')}", expand=False))
+
+
+# ---------------------------------------------------------------------------
 # edit
 # ---------------------------------------------------------------------------
 
@@ -405,6 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
               uv run memory.py list --realm knowledge_base --topic "api docs" --limit 50
               uv run memory.py search "quarterly revenue"
               uv run memory.py search "onboarding process" --realm institutional --top-k 5 --show-full
+              uv run memory.py show <doc_id> --realm institutional
               uv run memory.py add --topic "meeting notes" --realm institutional
               uv run memory.py edit <doc_id> --realm knowledge_base
               uv run memory.py delete <doc_id> --realm knowledge_base
@@ -435,6 +483,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--topic", help="Restrict to topic")
     p_search.add_argument("--top-k", type=int, default=10, dest="top_k", help="Number of results (default: 10)")
     p_search.add_argument("--show-full", action="store_true", dest="show_full", help="Print full content of each result")
+
+    # --- show ---
+    p_show = sub.add_parser("show", help="Display a single document in full")
+    p_show.add_argument("doc_id", help="Document ID (or prefix)")
+    p_show.add_argument("--realm", choices=_realm_choices(), required=True, help="Realm the document lives in")
 
     # --- edit ---
     p_edit = sub.add_parser("edit", help="Update a document by ID")
@@ -472,6 +525,7 @@ def main() -> None:
         "list": cmd_list,
         "add": cmd_add,
         "search": cmd_search,
+        "show": cmd_show,
         "edit": cmd_edit,
         "delete": cmd_delete,
         "import": cmd_import,

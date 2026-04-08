@@ -146,6 +146,12 @@ class AgentRunner:
                 )
 
         _console.print(Rule("[dim]Session complete[/dim]"))
+
+        # Post-session: summarise conversation + reconcile facts into memory
+        if agent_config.get("post_session_flow") and not shared.get("suspended"):
+            from engine.post_session_runner import PostSessionRunner
+            PostSessionRunner().run_after_session(shared)
+
         return shared
 
     def _load_agent(self) -> dict:
