@@ -20,6 +20,7 @@ class ToolContext:
     allowed_paths: list[str] = field(default_factory=list)
     allowed_commands: list[str] = field(default_factory=list)
     fetched_cache: set[str] = field(default_factory=set)
+    todo_list: list = field(default_factory=list)
 
 
 _REGISTRY: dict[str, Callable] = {}

@@ -28,11 +28,15 @@ from tools import ToolContext, get_tool
 console = Console()
 
 
+PREVIEW_SESSION_ID = "preview"
+
+
 def build_system_prompt(
     block_id: str,
     block_config: dict,
     agent_config: dict,
     context_injection: str = "",
+    session_id: str = PREVIEW_SESSION_ID,
 ) -> str:
     """Replicate the system-prompt assembly in LLMBlock.exec without calling Bedrock."""
     system_prompt: str = block_config["system_prompt"]
@@ -41,20 +45,25 @@ def build_system_prompt(
     if context_injection:
         system_prompt = context_injection.rstrip() + "\n\n" + system_prompt
 
-    # 2. Append workspace paths
-    allowed_paths: list[str] = (
-        agent_config.get("permissions", {}).get("workspace_paths", [])
-    )
+    # 2. Inject workspace paths — mirrors runner.py (session-scoped) + block.py formatting
+    base_paths: list[str] = agent_config.get("permissions", {}).get("workspace_paths", [])
+    # runner.py appends session_id to each base path
+    allowed_paths = [str(Path(p.rstrip("/")) / session_id) + "/" for p in base_paths]
     if allowed_paths:
         paths_str = ", ".join(f"`{p}`" for p in allowed_paths)
-        system_prompt = system_prompt.rstrip() + f"\n\nYour allowed workspace paths: {paths_str}\n"
+        session_path = paths_str  # already session-scoped; matches block.py behaviour
+        system_prompt = (
+            system_prompt.rstrip()
+            + f"\n\nYou can access files in: {paths_str}"
+            + f"\nYour session working directory is: {session_path}\n"
+        )
 
     # 3. Append ## Available Tools
     tool_names: list[str] = block_config.get("tools", [])
     if tool_names:
         ctx = ToolContext(
             agent_id=agent_config["id"],
-            session_id="preview",
+            session_id=session_id,
             allowed_paths=allowed_paths,
             allowed_commands=agent_config.get("permissions", {}).get("allowed_commands", []),
         )
@@ -89,7 +98,7 @@ def check_agent(agent_id: str, block_id: str | None) -> None:
 
     flow_alias = agent_config["flows"].get("main")
     flow_path = flows_dir / f"{flow_alias}.yaml"
-    _, flow_config = load_flow(flow_path)
+    _, flow_config, _ = load_flow(flow_path)
 
     blocks: dict = flow_config.get("blocks", {})
     targets = [block_id] if block_id else list(blocks.keys())

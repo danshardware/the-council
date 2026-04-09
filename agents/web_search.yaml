@@ -1,0 +1,19 @@
+id: web_search
+name: Web Search Agent
+description: |
+  General-purpose agent for searching the web. Receives a scoped task, gathers information.
+
+flows:
+  main: web_search
+  inbox: web_search
+
+max_iterations: 10
+
+model_defaults:
+  provider: bedrock
+  model_id: amazon.nova-pro-v1:0
+
+permissions:
+  workspace_paths:
+    - workspace/web_search/
+  allowed_commands: []

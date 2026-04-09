@@ -19,9 +19,9 @@ class _EndNode(Node):
     def exec(self, prep_res): return None
     def post(self, shared, prep_res, exec_res): return "end"
 
-def load_flow(flow_path: str | Path) -> tuple[Flow, dict]:
+def load_flow(flow_path: str | Path) -> tuple[Flow, dict, dict[str, BaseBlock]]:
     """
-    Load a flow YAML and return (PocketFlow Flow, raw flow_config dict).
+    Load a flow YAML and return (PocketFlow Flow, raw flow_config dict, block_instances dict).
 
     The YAML must have:
         id:     str
@@ -71,4 +71,4 @@ def load_flow(flow_path: str | Path) -> tuple[Flow, dict]:
         )
 
     flow = Flow(start=block_instances[start_id])
-    return flow, flow_config
+    return flow, flow_config, block_instances

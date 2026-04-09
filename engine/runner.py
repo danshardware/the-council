@@ -10,7 +10,10 @@ import yaml
 from rich.console import Console
 from rich.rule import Rule
 
+import traceback
+
 from engine.block import MaxIterationsError, SuspendExecution
+from engine.llm import LLMUnavailableError
 from engine.flow_loader import load_flow
 from engine.logger import Logger
 from tools import ToolContext
@@ -37,6 +40,8 @@ class AgentRunner:
         flow_name: str = "main",
         session_id: str | None = None,
         prior_messages: list | None = None,
+        resume_from_block: str | None = None,
+        resume_todo_list: list | None = None,
     ) -> dict:
         """
         Run the agent with the given prompt.
@@ -63,7 +68,19 @@ class AgentRunner:
         flow_path = self.flows_dir / f"{flow_file_key}.yaml"
 
         # Load flow
-        flow, flow_config = load_flow(flow_path)
+        flow, flow_config, block_instances = load_flow(flow_path)
+
+        # When resuming mid-flow, restart from the last completed block rather
+        # than the flow's start node.  Silently falls back to start if the block
+        # isn't found (e.g. flow was restructured since the checkpoint).
+        if resume_from_block and resume_from_block in block_instances:
+            flow.start_node = block_instances[resume_from_block]
+            _console.print(f"[dim]Resuming from block: {resume_from_block}[/dim]")
+        elif resume_from_block:
+            _console.print(
+                f"[yellow]Warning:[/yellow] resume_from_block '{resume_from_block}' "
+                "not found in flow — starting from beginning."
+            )
 
         # Iteration cap: lower of agent vs flow
         agent_max = agent_config.get("max_iterations", 50)
@@ -84,6 +101,10 @@ class AgentRunner:
         # When resuming, seed the conversation with prior history so the agent
         # can continue without repeating work already done.
         initial_messages: list = prior_messages if prior_messages else [{"role": "user", "content": prompt}]
+        # todo_list lives in BOTH shared and ToolContext (same reference) so:
+        #   - tools can mutate it via context.todo_list
+        #   - checkpoints capture it automatically via shared["_todo_list"]
+        _todo_list: list = list(resume_todo_list) if resume_todo_list else []
         shared: dict = {
             "agent_id": self.agent_id,
             "session_id": session_id,
@@ -96,6 +117,7 @@ class AgentRunner:
             "action_input": {},
             "messages": initial_messages,
             "initial_prompt": prompt,
+            "_todo_list": _todo_list,
             "context_injection": _load_context_files(agent_config),
             "logger": Logger(str(self.logs_dir), self.agent_id, session_id),
             "tool_context": ToolContext(
@@ -105,6 +127,7 @@ class AgentRunner:
                 allowed_commands=agent_config.get("permissions", {}).get(
                     "allowed_commands", []
                 ),
+                todo_list=_todo_list,
             ),
         }
 
@@ -129,6 +152,14 @@ class AgentRunner:
                 _console.print(
                     f"\n[bold red]Max iterations reached:[/bold red] {exc}"
                 )
+                _dispatch_on_error("max_iterations", exc, flow, flow_config, block_instances, shared)
+            except LLMUnavailableError as exc:
+                tb = traceback.format_exc()
+                shared["logger"].log_event(
+                    shared, "llm_offline", error=str(exc), traceback=tb
+                )
+                _console.print(f"\n[bold red]LLM unavailable:[/bold red] {exc}")
+                _dispatch_on_error("llm_offline", exc, flow, flow_config, block_instances, shared)
             except SuspendExecution as exc:
                 shared["logger"].log_event(
                     shared, "session_suspended", checkpoint=exc.checkpoint_path
@@ -140,10 +171,19 @@ class AgentRunner:
                 shared["suspended"] = True
                 shared["checkpoint_path"] = exc.checkpoint_path
             except Exception as exc:
+                tb = traceback.format_exc()
                 shared["logger"].log_event(
-                    shared, "unhandled_error", error=str(exc)
+                    shared, "unhandled_error", error=str(exc), traceback=tb
                 )
                 _console.print(f"\n[bold red]Unhandled error:[/bold red] {exc}")
+                _console.print(f"[dim]{tb}[/dim]")
+                _dispatch_on_error("unhandled", exc, flow, flow_config, block_instances, shared)
+            except BaseException as exc:
+                # Catches KeyboardInterrupt, SystemExit etc. — log then re-raise
+                shared["logger"].log_event(
+                    shared, "session_interrupted", error=type(exc).__name__
+                )
+                _console.print(f"\n[yellow]Session interrupted ({type(exc).__name__})[/yellow]")
                 raise
             finally:
                 shared["logger"].log_event(
@@ -201,6 +241,8 @@ class AgentRunner:
 
         # --- 1. Try latest workspace checkpoint ---
         prior_messages: list | None = None
+        resume_from_block: str | None = None
+        resume_todo_list: list | None = None
         checkpoint_source = "none"
         if session_workspace:
             from engine.state import latest_session_checkpoint, load_checkpoint as _load_cp
@@ -209,6 +251,8 @@ class AgentRunner:
                 try:
                     cp_data = _load_cp(cp_path)
                     prior_messages = cp_data.get("messages")
+                    resume_from_block = cp_data.get("_last_block_id")
+                    resume_todo_list = cp_data.get("_todo_list")
                     checkpoint_source = cp_path.name
                 except Exception as exc:
                     _console.print(f"[yellow]Warning:[/yellow] could not load checkpoint {cp_path}: {exc}")
@@ -242,7 +286,9 @@ class AgentRunner:
 
         _console.print(
             f"[bold yellow]Resuming session[/bold yellow] [dim]{session_id}[/dim]  "
-            f"[dim](source: {checkpoint_source} | {len(prior_messages)} messages)[/dim]"
+            f"[dim](source: {checkpoint_source} | {len(prior_messages)} messages"
+            + (f" | block: {resume_from_block}" if resume_from_block else "")
+            + "[/dim]"
         )
 
         return self.run(
@@ -250,6 +296,8 @@ class AgentRunner:
             flow_name=flow_name,
             session_id=session_id,
             prior_messages=prior_messages,
+            resume_from_block=resume_from_block,
+            resume_todo_list=resume_todo_list,
         )
 
     def _load_agent(self) -> dict:
@@ -288,3 +336,60 @@ def _load_context_files(agent_config: dict) -> str:
         if chunks:
             parts.append(f"<{tag}>\n" + "\n\n".join(chunks) + f"\n</{tag}>")
     return "\n\n".join(parts)
+
+
+def _dispatch_on_error(
+    error_type: str,
+    exc: Exception,
+    flow,
+    flow_config: dict,
+    block_instances: dict,
+    shared: dict,
+) -> None:
+    """Run the on_error recovery block for the given error_type, if configured."""
+    on_error = flow_config.get("on_error", {})
+    handler = on_error.get(error_type)
+    if not handler:
+        return
+
+    start_block = handler.get("start")
+    if not start_block or start_block not in block_instances:
+        _console.print(
+            f"[yellow]on_error.{error_type}: recovery block '{start_block}' not found — skipping.[/yellow]"
+        )
+        return
+
+    # Inject a system message so the recovery block understands the situation
+    shared.setdefault("messages", []).append({
+        "role": "user",
+        "content": (
+            f"[SYSTEM] The session encountered an error ({error_type}): {exc}. "
+            "A recovery flow is now running. Use the workspace files already written "
+            "to produce the best output you can."
+        ),
+    })
+    shared["iteration"] = 0  # fresh budget for the recovery flow
+    shared.pop("_grace_mode", None)
+    shared.pop("_iteration_warned", None)
+
+    _console.print(
+        f"\n[bold yellow]Running on_error recovery:[/bold yellow] "
+        f"{error_type} → [cyan]{start_block}[/cyan]"
+    )
+    flow.start_node = block_instances[start_block]
+    try:
+        flow._run(shared)
+    except Exception as recovery_exc:
+        import traceback as _tb
+        _console.print(
+            f"[bold red]Recovery flow also failed:[/bold red] {recovery_exc}\n"
+            + _tb.format_exc()
+        )
+
+    # Always print the resume hint so the user knows they can continue manually
+    agent_id = shared.get("agent_id", "?")
+    session_id = shared.get("session_id", "?")
+    _console.print(
+        f"\n[bold cyan]To resume this session manually:[/bold cyan]\n"
+        f"  uv run run.py --agent {agent_id} --resume {session_id}"
+    )

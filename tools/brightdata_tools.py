@@ -54,7 +54,8 @@ def _post(payload: dict[str, Any], api_key: str) -> tuple[int, str]:
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
         return exc.code, body
-
+    except urllib.error.URLError as exc:
+        return 0, str(exc)
 
 def _post_with_retry(payload: dict[str, Any], api_key: str) -> tuple[int, str]:
     """POST with exponential backoff on transient errors."""

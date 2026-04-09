@@ -56,7 +56,7 @@ class BaseBlock(Node):
             )
 
         # --- Approaching-limit warning (injected once, ~10 turns before cap) ---
-        _WARN_BUFFER = int(self.config.get("max_visits", 100) / 10)
+        _WARN_BUFFER = max(3, max_iter // 10)
         if not shared.get("_iteration_warned") and iteration >= max_iter - _WARN_BUFFER:
             shared["_iteration_warned"] = True
             remaining = max_iter - iteration
@@ -96,7 +96,7 @@ class BaseBlock(Node):
     def _get_bedrock_tools(self, shared: dict) -> list:
         ctx: ToolContext = shared["tool_context"]
         tools = []
-        for name in self.config.get("tools", []):
+        for name in (self.config.get("tools") or []):
             bt = get_tool(name, ctx)
             if bt is not None:
                 tools.append(bt)
@@ -122,6 +122,13 @@ class LLMBlock(BaseBlock):
         import sys
         messages = list(prep_res.get("messages", []))
         system_prompt = self.config["system_prompt"]
+        _logger = prep_res.get("logger")
+        _block_id = self.block_id
+
+        def _tool_callback(tc: dict) -> None:
+            if _logger:
+                _logger.log_event(prep_res, "tool_use", block=_block_id,
+                                  tool=tc["tool"], input=tc["input"], result=tc["result"])
 
         # Prepend shared context blocks (from agent context_files)
         context_injection: str = prep_res.get("context_injection", "")
@@ -132,7 +139,9 @@ class LLMBlock(BaseBlock):
         allowed_paths = prep_res.get("tool_context") and prep_res["tool_context"].allowed_paths
         if allowed_paths:
             paths_str = ", ".join(f"`{p}`" for p in allowed_paths)
-            system_prompt = system_prompt.rstrip() + f"\n\nYour allowed workspace paths: {paths_str}\n"
+            session_id = prep_res.get("session_id", "")
+            session_path = f"{paths_str}/{session_id}" if session_id else paths_str
+            system_prompt = system_prompt.rstrip() + f"\n\nYou can access files in: {paths_str}\nYour session working directory is: {session_path}\n"
 
         # Auto-inject tool schema section so agent knows available tool signatures
         if self._tools:
@@ -157,6 +166,7 @@ class LLMBlock(BaseBlock):
                     system_prompt=system_prompt,
                     messages=messages,
                     tools=self._tools or None,
+                    tool_callback=_tool_callback,
                 )
         else:
             parsed, in_tok, out_tok = call_llm(
@@ -164,6 +174,7 @@ class LLMBlock(BaseBlock):
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=self._tools or None,
+                tool_callback=_tool_callback,
             )
         parsed["_in_tokens"] = in_tok
         parsed["_out_tokens"] = out_tok
@@ -174,12 +185,7 @@ class LLMBlock(BaseBlock):
         in_tok = exec_res.pop("_in_tokens", 0)
         out_tok = exec_res.pop("_out_tokens", 0)
         raw_response = exec_res.pop("_raw_response", "")
-        tool_calls = exec_res.pop("_tool_calls", [])
-
-        # Log any tool calls that happened inside this LLM turn
-        for tc in tool_calls:
-            self._log(shared, "tool_use", tool=tc["tool"],
-                      input=tc["input"], result=tc["result"])
+        exec_res.pop("_tool_calls", [])  # already logged in real-time via tool_callback
 
         shared["action"] = action
         shared["action_input"] = exec_res.get("action_input", {})
@@ -206,6 +212,7 @@ class LLMBlock(BaseBlock):
         try:
             tc = shared.get("tool_context")
             if tc and getattr(tc, "allowed_paths", None):
+                shared["_last_block_id"] = self.block_id
                 from engine.state import save_session_checkpoint
                 save_session_checkpoint(shared, tc.allowed_paths[0])
         except Exception:
@@ -492,11 +499,149 @@ class HumanReplyBlock(BaseBlock):
 
 
 # ---------------------------------------------------------------------------
+# One-shot block — isolated LLM call with a clean context window
+# ---------------------------------------------------------------------------
+
+class OneShotBlock(BaseBlock):
+    """
+    Makes a single LLM call with a clean, isolated context window.
+
+    The previous conversation history in shared["messages"] is NOT sent to the model,
+    so large tool results (e.g. scraped pages) can't pollute the main agent's context.
+
+    Reads `url` and `focus` from shared["action_input"], builds a fresh single-turn
+    conversation, and writes the parsed `summary` field back to shared[output_key].
+    A compact summary is also appended to shared["messages"] so the calling block
+    knows what was found.
+
+    Config keys:
+        system_prompt (str): Template; {url} and {focus} are substituted from action_input.
+        model_id (str):      Optional model override.
+        tools (list[str]):   Tools available to the isolated call (typically just scrape_url).
+        output_key (str):    Key to write the summary into shared (default: "last_summary").
+    """
+
+    def prep(self, shared: dict) -> dict:
+        self._check_iterations(shared)
+        self._log(shared, "block_enter", iteration=shared["iteration"])
+        self._model_id = self.config.get("model_id") or self._default_model(shared)
+        self._tools = self._get_bedrock_tools(shared)
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> dict:
+        import sys
+        action_input: dict = prep_res.get("action_input", {})
+        url = action_input.get("url", "")
+        focus = action_input.get("focus", "")
+
+        system_prompt = self.config.get("system_prompt", "")
+        try:
+            system_prompt = system_prompt.format(**action_input)
+        except (KeyError, ValueError):
+            pass
+
+        # Inject workspace paths (scrape_url needs no workspace, but keep consistent)
+        allowed_paths = prep_res.get("tool_context") and prep_res["tool_context"].allowed_paths
+        if allowed_paths:
+            paths_str = ", ".join(f"`{p}`" for p in allowed_paths)
+            system_prompt = system_prompt.rstrip() + f"\n\nYou can access files in: {paths_str}\n"
+
+        if self._tools:
+            lines = ["\n## Available Tools"]
+            for bt in self._tools:
+                spec = bt.tool_spec
+                props = spec.get("inputSchema", {}).get("json", {}).get("properties", {})
+                params = ", ".join(
+                    f"{k}: {v.get('type', 'string')}" for k, v in props.items()
+                )
+                lines.append(f"- **{spec['name']}**({params}) — {spec.get('description', '')}")
+            system_prompt = system_prompt.rstrip() + "\n" + "\n".join(lines) + "\n"
+
+        user_message = f"URL: {url}\nFocus: {focus}"
+
+        _logger = prep_res.get("logger")
+        _block_id = self.block_id
+
+        def _tool_callback(tc: dict) -> None:
+            if _logger:
+                _logger.log_event(prep_res, "tool_use", block=_block_id,
+                                  tool=tc["tool"], input=tc["input"], result=tc["result"])
+
+        if sys.stdout.isatty():
+            with _console.status(
+                f"[dim]⏳ {self.block_id} → {self._model_id.split('.')[-1]}…[/dim]",
+                spinner="dots",
+            ):
+                parsed, in_tok, out_tok = call_llm(
+                    model_id=self._model_id,
+                    system_prompt=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                    tools=self._tools or None,
+                    tool_callback=_tool_callback,
+                )
+        else:
+            parsed, in_tok, out_tok = call_llm(
+                model_id=self._model_id,
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+                tools=self._tools or None,
+                tool_callback=_tool_callback,
+            )
+
+        parsed["_in_tokens"] = in_tok
+        parsed["_out_tokens"] = out_tok
+        return parsed
+
+    def post(self, shared: dict, prep_res: dict, exec_res: dict) -> str:
+        in_tok = exec_res.pop("_in_tokens", 0)
+        out_tok = exec_res.pop("_out_tokens", 0)
+        raw_response = exec_res.pop("_raw_response", "")
+        exec_res.pop("_tool_calls", [])
+
+        output_key = self.config.get("output_key", "last_summary")
+        summary = exec_res.get("summary") or exec_res.get("reasoning") or raw_response
+        shared[output_key] = summary
+
+        url = prep_res.get("action_input", {}).get("url", "?")
+
+        # Compact injection into shared messages — the full scraped content stays out
+        compact = summary[:600] if summary else "[no summary]"
+        shared["messages"].append({
+            "role": "user",
+            "content": f"[SYSTEM] Scraped and summarised {url}:\n{compact}",
+        })
+
+        self._log(
+            shared,
+            "llm_call",
+            model=self._model_id,
+            action="default",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            raw_response=raw_response[:2000],
+        )
+        self._log(shared, "transition", from_block=self.block_id, to_action="default")
+
+        _console.print(
+            Panel(
+                Text.from_markup(
+                    f"[bold cyan]{self.block_id}[/bold cyan]  [dim]{url}[/dim]\n"
+                    f"[dim]{compact[:200]}[/dim]"
+                ),
+                title=f"🔍 One-Shot • iter {shared['iteration']}",
+                border_style="blue",
+            )
+        )
+        return "default"
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
 BLOCK_TYPES = {
     "llm": LLMBlock,
+    "one_shot": OneShotBlock,
     "guardrail": GuardrailBlock,
     "tool_call": ToolCallBlock,
     "checkpoint": CheckpointBlock,

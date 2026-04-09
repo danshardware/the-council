@@ -23,12 +23,18 @@ _RETRY_EXCEPTIONS = (
 )
 
 
+class LLMUnavailableError(Exception):
+    """Raised when all retry attempts for a transient LLM/network error are exhausted."""
+    pass
+
+
 def call_llm(
     model_id: str,
     system_prompt: str,
     messages: list[dict[str, str]],
     tools: list[BedrockTool] | None = None,
     max_retries: int = 3,
+    tool_callback=None,
 ) -> tuple[dict[str, Any], int, int]:
     """
     Call Bedrock, handle any native tool-use loop, then parse the final text as YAML.
@@ -37,7 +43,7 @@ def call_llm(
     last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
-            return _call_once(model_id, system_prompt, messages, tools)
+            return _call_once(model_id, system_prompt, messages, tools, tool_callback=tool_callback)
         except Exception as exc:
             exc_name = type(exc).__name__
             exc_str = str(exc)
@@ -48,9 +54,14 @@ def call_llm(
                       f"(attempt {attempt + 1}/{max_retries})")
                 time.sleep(wait)
                 last_exc = exc
+            elif is_transient:
+                # All retries exhausted on a connectivity/throttle error
+                raise LLMUnavailableError(
+                    f"LLM unavailable after {max_retries} attempts: {exc_name}: {exc_str}"
+                ) from exc
             else:
                 raise
-    raise last_exc  # type: ignore[misc]
+    raise LLMUnavailableError(f"LLM unavailable: {last_exc}") from last_exc  # type: ignore[misc]
 
 
 def _call_once(
@@ -58,6 +69,7 @@ def _call_once(
     system_prompt: str,
     messages: list[dict[str, str]],
     tools: list[BedrockTool] | None = None,
+    tool_callback=None,
 ) -> tuple[dict[str, Any], int, int]:
     conv = Conversation(
         model_id=model_id,
@@ -72,8 +84,14 @@ def _call_once(
         else:
             conv.conversation.append(Message(msg["role"], content=content))
 
+    # Bedrock requires the conversation to end with a user turn. If the last
+    # message is from the assistant (e.g. summary from a previous block), strip
+    # trailing assistant messages so the model can produce the next turn cleanly.
+    while conv.conversation and conv.conversation[-1].role == "assistant":
+        conv.conversation.pop()
+
     tool_calls: list = []
-    _role, text = conv.call_model(tool_event_log=tool_calls)
+    _role, text = conv.call_model(tool_event_log=tool_calls, tool_callback=tool_callback)
     text = text.strip()  # Strip trailing/leading whitespace for Bedrock validation
     parsed = _parse_yaml_response(text)
     parsed["_raw_response"] = text

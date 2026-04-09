@@ -342,7 +342,9 @@ class Conversation:
             raise ValueError(f"Tool '{tool_name}' is not registered.")
         return self.tools[tool_name](*args, **kwargs)
 
-    def call_model(self, messages: list[Message] | None = None, tool_event_log: list | None = None) -> tuple[str, str]:
+    _MAX_TOOL_CALLS_PER_TURN = 40
+
+    def call_model(self, messages: list[Message] | None = None, tool_event_log: list | None = None, tool_callback=None, _tool_call_count: list[int] | None = None) -> tuple[str, str]:
         """Call the AWS Bedrock API with the current conversation.
         
         Makes an API call to the configured Bedrock model, handling tool use if the model
@@ -361,6 +363,8 @@ class Conversation:
         Raises:
             Various AWS Bedrock exceptions if the API call fails.
         """
+        if _tool_call_count is None:
+            _tool_call_count = [0]
         bedrock_client = boto3.client(service_name='bedrock-runtime', config=_BEDROCK_CONFIG)
         if messages is None:
             conversation = [m.to_dict() for m in self.conversation]
@@ -422,12 +426,19 @@ class Conversation:
                         print(f"Error invoking tool {tool_name}: {e}")
                         tool_result = f"Error: {e}"
 
+                    _tool_call_count[0] += 1
+                    if _tool_call_count[0] > self._MAX_TOOL_CALLS_PER_TURN:
+                        return ("assistant", f"[SYSTEM] Tool call limit ({self._MAX_TOOL_CALLS_PER_TURN}) exceeded in one turn. Stopping tool use and returning.")
+
+                    tc_record = {
+                        "tool": tool_name,
+                        "input": tool_input,
+                        "result": str(tool_result)[:500],
+                    }
                     if tool_event_log is not None:
-                        tool_event_log.append({
-                            "tool": tool_name,
-                            "input": tool_input,
-                            "result": str(tool_result)[:500],
-                        })
+                        tool_event_log.append(tc_record)
+                    if tool_callback is not None:
+                        tool_callback(tc_record)
 
                     # Bedrock requires json content to be a dict; use text for strings
                     if isinstance(tool_result, dict):
@@ -464,7 +475,7 @@ class Conversation:
                         self.conversation.append(tool_result_message_obj)
 
                     # call ourselves again with the updated conversation
-                    return self.call_model(tool_event_log=tool_event_log)
+                    return self.call_model(tool_event_log=tool_event_log, tool_callback=tool_callback, _tool_call_count=_tool_call_count)
 
         # Continue the conversation
         token_usage = response['usage']

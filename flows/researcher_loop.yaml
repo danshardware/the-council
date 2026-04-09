@@ -2,6 +2,14 @@ id: researcher_loop
 max_iterations: 30
 start: elaborate
 
+on_error:
+  max_iterations:
+    start: recovery_compile
+  llm_offline:
+    start: recovery_compile
+  unhandled:
+    start: recovery_compile
+
 blocks:
 
   # ── Phase 1: Decompose the question into a structured plan ──────────────────
@@ -9,40 +17,44 @@ blocks:
   elaborate:
     type: llm
     system_prompt: |
-      You are a research agent. Your first task is to produce a structured research plan.
+      You are a research agent. Your first task is to build a structured research plan
+      as a todo list.
 
-      1. Elaborate on the question: define key terms, clarify scope, identify angles and perspectives.
-      2. Generate 3-5 focused subquestions that together provide comprehensive coverage.
+      1. Check memory for any relevant prior research or notes on this topic. If you find relevant
+         info, use it to inform your plan.
+      2. Elaborate on the question: define key terms, clarify scope, identify angles and perspectives.
+      3. Generate 3-5 focused subquestions that together provide comprehensive coverage.
          Each subquestion must be specific and independently answerable.
+      
+      Once you have that, perform the following steps:
 
-      Save the plan as plan.md inside your workspace path (shown below).
+      0. Check if the work has already been done. if your todo list is already populated and
+        you have a notes.md file with elaboration and subquestions, then skip straight to
+        research. If not, continue with the next steps
+      1. Otherwise, create a `notes.md` file in your workspace and write your elaboration and the list of subquestions there.
+      2. Call the `todo_list` tool with `operation=bulk_add` to load all subquestions as tasks.
+      3. Go to action: research.
 
       Respond ONLY with valid YAML:
       ```yaml
-      reasoning: "your elaboration of the question and rationale for the subquestions chosen"
-      action: write_plan
+      reasoning: "your elaboration and rationale"
+      action: todo_list  # or: research (if list already populated)
       action_input:
-        path: "<your_workspace>/plan.md"   # substitute <your_workspace> with your actual workspace path
-        content: |
-          # Research Plan
-          ## Question
-          [restate the question verbatim]
-          ## Elaboration
-          [scope, key terms, angles, perspectives]
-          ## Subquestions
-          1. [subquestion 1]
-          2. [subquestion 2]
-          3. [subquestion 3]
+        operation: bulk_add
+        items: '["Subquestion 1", "Subquestion 2", "Subquestion 3"]'
       ```
+    tools:
+      - todo_list
+      - search_memory
     transitions:
-      write_plan: write_plan_block
-      write_file: write_plan_block   # LLM sometimes emits write_file instead of write_plan
+      todo_list: todo_block
+      research: research
       synthesise: synthesise
       default: elaborate
 
-  write_plan_block:
+  todo_block:
     type: tool_call
-    tool: write_file
+    tool: todo_list
     transitions:
       default: research
 
@@ -53,6 +65,14 @@ blocks:
     model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
     system_prompt: |
       You are a research agent working through a structured research plan.
+
+      ## Workflow — repeat until all subquestions are covered
+      1. Call todo_list with operation=get_next to get your current task (auto-marks it
+         in_progress). If it returns ALL_DONE, go to action: synthesise.
+      2. Search memory for cached info, then use search_web / scrape_url for current data.
+      3. Write your findings for this subquestion to notes.md (append).
+      4. Call todo_list with operation=mark, item_id=<id>, status=done.
+      5. Loop — call get_next again for the next task.
 
       ## Tool priority for internet research
       1. **search_web** — always try this first for any search query.
@@ -65,20 +85,10 @@ blocks:
          Don't use it to bypass paywalls or CAPTCHAs 
          — if you encounter these, switch to scrape_url instead.
 
-      ## Workflow — repeat until all subquestions are covered
-      1. Read your plan to see all subquestions (plan.md in your workspace).
-      2. Try to read your notes to see findings so far (notes.md in your workspace).
-         If notes.md does not exist, create it with the heading "# Research Notes".
-      3. Pick the next subquestion that does not yet have findings in your notes.
-      4. Search memory for relevant cached information, then use search_web / scrape_url
-         to find current information.
-      5. Write back the full accumulated notes — overwrite notes.md with all content including
-         the new findings under a ## Subquestion N heading.
-      6. Once every subquestion has a findings section in your notes, choose 'synthesise'.
-
-      Be aware that you have a limited time to do this, so it's best to be concise and focused 
-      in your research. Do not get bogged down in errors or research roadblocks. Report it 
-      and how a reviewer can try instead and move on.
+      Be concise and focused. On errors or research roadblocks, note them and move on.
+      Note any limitations or uncertainties in your findings. Ensure any information
+      you cite is accurate and from a reliable source. Do not fabricate information
+      or sources. Annotate any results with a source.
     tools:
       - search_memory
       - search_web
@@ -86,6 +96,7 @@ blocks:
       - read_file
       - write_file
       - browse_web
+      - todo_list
     transitions:
       search_memory: search_block
       search_web: search_web_block
@@ -93,6 +104,7 @@ blocks:
       read_file: read_block
       write_file: write_notes_block
       browse_web: check_browse_intent
+      todo_list: todo_block
       synthesise: synthesise
       default: research
 
@@ -246,4 +258,53 @@ blocks:
     transitions:
       approved: END
       flagged: synthesise
+      default: END
+
+  # ── Error recovery ──────────────────────────────────────────────────────────
+
+  recovery_compile:
+    type: llm
+    max_visits: 6
+    system_prompt: |
+      The research session ended early due to an error or iteration limit.
+
+      Read your workspace files (plan.md, notes.md) to see what was completed,
+      then write the best final report you can to report.md using whatever
+      information you have already gathered.
+
+      In your report:
+        - Note clearly which subquestions were fully researched vs. partially or not at all.
+        - Include a section "## Incomplete Research" listing what was not covered and why.
+        - Do NOT attempt new web searches or tool calls other than read_file / write_file.
+
+      Workflow:
+        1. Use `action: read_file` once or twice to read plan.md and notes.md.
+        2. Use `action: write_file` to write report.md. This is the final step — the
+           session ends immediately after write_file completes. Do not loop.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you found in notes and your plan for the report"
+      action: read_file   # read_file | write_file
+      action_input:
+        path: "<your_workspace>/notes.md"   # or report.md for write_file
+      ```
+    tools:
+      - read_file
+      - write_file
+    transitions:
+      read_file: recovery_read
+      write_file: recovery_write
+      default: recovery_compile
+
+  recovery_read:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: recovery_compile
+
+  recovery_write:
+    type: tool_call
+    tool: write_file
+    transitions:
       default: END
