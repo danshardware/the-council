@@ -74,6 +74,7 @@ def _call_once(
 
     tool_calls: list = []
     _role, text = conv.call_model(tool_event_log=tool_calls)
+    text = text.strip()  # Strip trailing/leading whitespace for Bedrock validation
     parsed = _parse_yaml_response(text)
     parsed["_raw_response"] = text
     parsed["_tool_calls"] = tool_calls

@@ -9,6 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
+# Actual environment
+.env
+.env.*
+
 # Files in use when running or testing
 logs/
 workspace/

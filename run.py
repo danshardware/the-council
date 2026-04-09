@@ -15,6 +15,9 @@ from pathlib import Path
 # Ensure project root is on sys.path when run directly
 sys.path.insert(0, str(Path(__file__).parent))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from engine.runner import AgentRunner
 
 
@@ -46,6 +49,12 @@ def main() -> None:
     )
     parser.add_argument("--session", default=None, help="Session ID (auto-generated if omitted)")
     parser.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        default=None,
+        help="Resume a crashed session by SESSION_ID (reads state from its log file)",
+    )
+    parser.add_argument(
         "--agents-dir", default="agents", help="Directory containing agent YAML files"
     )
     parser.add_argument(
@@ -71,8 +80,6 @@ def main() -> None:
 
     if not args.agent:
         parser.error("--agent is required unless --daemon is specified")
-    if not args.prompt:
-        parser.error("--prompt is required unless --daemon is specified")
 
     runner = AgentRunner(
         agent_id=args.agent,
@@ -80,6 +87,14 @@ def main() -> None:
         flows_dir=args.flows_dir,
         logs_dir=args.logs_dir,
     )
+
+    if args.resume:
+        runner.resume(session_id=args.resume)
+        return
+
+    if not args.prompt:
+        parser.error("--prompt is required unless --daemon or --resume is specified")
+
     runner.run(prompt=args.prompt, flow_name=args.flow, session_id=args.session)
 
 

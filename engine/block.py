@@ -46,15 +46,49 @@ class BaseBlock(Node):
         visits[self.block_id] = visits.get(self.block_id, 0) + 1
 
         max_iter: int = shared.get("max_iterations", 50)
-        if shared["iteration"] > max_iter:
-            raise MaxIterationsError(
-                f"Max iterations ({max_iter}) reached at block '{self.block_id}'"
-            )
+        iteration: int = shared["iteration"]
+
+        # Per-block visit cap (independent of global iteration limit)
         max_visits = self.config.get("max_visits")
         if max_visits and visits[self.block_id] > max_visits:
             raise MaxIterationsError(
                 f"Block '{self.block_id}' exceeded max_visits={max_visits}"
             )
+
+        # --- Approaching-limit warning (injected once, ~10 turns before cap) ---
+        _WARN_BUFFER = int(self.config.get("max_visits", 100) / 10)
+        if not shared.get("_iteration_warned") and iteration >= max_iter - _WARN_BUFFER:
+            shared["_iteration_warned"] = True
+            remaining = max_iter - iteration
+            shared.setdefault("messages", []).append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM] Warning: you are approaching the iteration limit. "
+                    f"Approximately {remaining} turns remain. Begin consolidating your "
+                    "findings and move toward writing your final output now."
+                ),
+            })
+
+        # --- Grace period: 3 wrap-up turns before hard stop ---
+        if iteration > max_iter:
+            if not shared.get("_grace_mode"):
+                # First overflow — activate grace period
+                shared["_grace_mode"] = True
+                shared["max_iterations"] = iteration + 2  # activation turn + 2 more = 3 total
+                shared.setdefault("messages", []).append({
+                    "role": "user",
+                    "content": (
+                        "[SYSTEM] You have reached the iteration limit. "
+                        "You have exactly 3 turns left. "
+                        "Write your final output now using whatever information you have "
+                        "already gathered — do not start any new tasks. Make sure the to mention you had more work to do if need be."
+                    ),
+                })
+            else:
+                # Grace period exhausted → hard stop
+                raise MaxIterationsError(
+                    f"Max iterations ({max_iter}) reached at block '{self.block_id}'"
+                )
 
     def _default_model(self, shared: dict) -> str:
         return shared["agent_config"]["model_defaults"]["model_id"]
@@ -158,12 +192,24 @@ class LLMBlock(BaseBlock):
         elif raw_response and action == "default":
             # Parsing failed — include raw text so next iteration has some context
             summary += f" | (unparsed) {raw_response[:300]}"
+        # Strip to avoid Bedrock validation errors on trailing whitespace
+        summary = summary.strip()
         shared["messages"].append({"role": "assistant", "content": summary})
 
         # Keep conversation history bounded to avoid context bloat (keep first user msg + last 11)
         messages = shared["messages"]
         if len(messages) > 12:
             shared["messages"] = [messages[0]] + messages[-11:]
+
+        # Auto-checkpoint after every LLM turn so resume() has a per-turn snapshot.
+        # Best-effort — a failure here must never crash the agent.
+        try:
+            tc = shared.get("tool_context")
+            if tc and getattr(tc, "allowed_paths", None):
+                from engine.state import save_session_checkpoint
+                save_session_checkpoint(shared, tc.allowed_paths[0])
+        except Exception:
+            pass
 
         self._log(
             shared,
@@ -176,12 +222,13 @@ class LLMBlock(BaseBlock):
         )
         self._log(shared, "transition", from_block=self.block_id, to_action=action)
 
+        display_text = reasoning[:200] if reasoning else f"[no YAML] {raw_response[:300]}"
         _console.print(
             Panel(
                 Text.from_markup(
                     f"[bold cyan]{self.block_id}[/bold cyan]  "
                     f"[yellow]→[/yellow] [bold white]{action}[/bold white]\n"
-                    f"[dim]{reasoning[:200]}[/dim]"
+                    f"[dim]{display_text}[/dim]"
                 ),
                 title=f"🤖 LLM • iter {shared['iteration']}",
                 border_style="green",
@@ -288,7 +335,15 @@ class ToolCallBlock(BaseBlock):
         action_input: dict = prep_res.get("action_input", {})
         import time
         t0 = time.monotonic()
-        result = bt(**action_input)
+        try:
+            result = bt(**action_input)
+        except TypeError as e:
+            # LLM called with wrong parameter names/count — return error message
+            # so LLM can see and correct itself
+            result = f"[ERROR] Tool '{tool_name}' parameter error: {str(e)}\nExpected parameters: {bt.tool_spec['inputSchema']['json']['properties'].keys()}"
+        except Exception as e:
+            # Other errors — also return as message so LLM sees it
+            result = f"[ERROR] Tool '{tool_name}' failed: {str(e)}"
         duration_ms = int((time.monotonic() - t0) * 1000)
         return {"result": result, "duration_ms": duration_ms, "tool": tool_name}
 

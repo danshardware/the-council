@@ -19,6 +19,7 @@ class ToolContext:
     session_id: str
     allowed_paths: list[str] = field(default_factory=list)
     allowed_commands: list[str] = field(default_factory=list)
+    fetched_cache: set[str] = field(default_factory=set)
 
 
 _REGISTRY: dict[str, Callable] = {}

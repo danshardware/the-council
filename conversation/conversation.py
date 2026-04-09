@@ -471,8 +471,9 @@ class Conversation:
         self.input_tokens += token_usage['inputTokens']
         self.output_tokens += token_usage['outputTokens']
         self.total_tokens += token_usage['totalTokens']
-        return (response['output']['message']['role'], 
-                response['output']['message']['content'][0]['text'])
+        content = response['output']['message'].get('content', [])
+        text_parts = [item['text'] for item in content if isinstance(item, dict) and 'text' in item]
+        return (response['output']['message']['role'], '\n'.join(text_parts))
     def get_last_message(self) -> Message | None:
         """Get the last message in the conversation.
         

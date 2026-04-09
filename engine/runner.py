@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -35,6 +36,7 @@ class AgentRunner:
         prompt: str,
         flow_name: str = "main",
         session_id: str | None = None,
+        prior_messages: list | None = None,
     ) -> dict:
         """
         Run the agent with the given prompt.
@@ -79,6 +81,9 @@ class AgentRunner:
             Path(_sp).mkdir(parents=True, exist_ok=True)
 
         # Build shared state
+        # When resuming, seed the conversation with prior history so the agent
+        # can continue without repeating work already done.
+        initial_messages: list = prior_messages if prior_messages else [{"role": "user", "content": prompt}]
         shared: dict = {
             "agent_id": self.agent_id,
             "session_id": session_id,
@@ -89,7 +94,7 @@ class AgentRunner:
             "block_visits": {},
             "action": None,
             "action_input": {},
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": initial_messages,
             "initial_prompt": prompt,
             "context_injection": _load_context_files(agent_config),
             "logger": Logger(str(self.logs_dir), self.agent_id, session_id),
@@ -111,7 +116,9 @@ class AgentRunner:
                 shared,
                 "session_start",
                 flow=flow_file_key,
+                flow_name=flow_name,
                 prompt=prompt,
+                resumed=prior_messages is not None,
             )
             try:
                 flow._run(shared)
@@ -153,6 +160,97 @@ class AgentRunner:
             PostSessionRunner().run_after_session(shared)
 
         return shared
+
+    def resume(self, session_id: str) -> dict:
+        """Resume a crashed or incomplete session.
+
+        Recovery order:
+        1. Latest timestamped checkpoint from <workspace>/_checkpoints/ (richest state)
+        2. `messages` snapshot from the last session_end in the JSONL log (fallback)
+
+        In both cases the workspace file listing is injected as a [SYSTEM] message
+        so the agent knows exactly what it already produced and can continue without
+        re-doing completed work.  The iteration counter always resets to 0 — the
+        agent gets a fresh budget.
+        """
+        log_path = self.logs_dir / self.agent_id / f"{session_id}.jsonl"
+        if not log_path.exists():
+            raise FileNotFoundError(
+                f"No log found for session '{session_id}' "
+                f"(looked in {log_path})"
+            )
+
+        events: list[dict] = []
+        with log_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    events.append(json.loads(line))
+
+        start_event = next((e for e in events if e["event"] == "session_start"), None)
+        if start_event is None:
+            raise ValueError(f"No session_start found in log for '{session_id}'")
+
+        prompt: str = start_event["prompt"]
+        flow_name: str = start_event.get("flow_name", "main")
+
+        # Derive session workspace path (same logic as run())
+        agent_config = self._load_agent()
+        _base_paths = agent_config.get("permissions", {}).get("workspace_paths", [])
+        session_workspace = Path(_base_paths[0].rstrip("/")) / session_id if _base_paths else None
+
+        # --- 1. Try latest workspace checkpoint ---
+        prior_messages: list | None = None
+        checkpoint_source = "none"
+        if session_workspace:
+            from engine.state import latest_session_checkpoint, load_checkpoint as _load_cp
+            cp_path = latest_session_checkpoint(session_workspace)
+            if cp_path:
+                try:
+                    cp_data = _load_cp(cp_path)
+                    prior_messages = cp_data.get("messages")
+                    checkpoint_source = cp_path.name
+                except Exception as exc:
+                    _console.print(f"[yellow]Warning:[/yellow] could not load checkpoint {cp_path}: {exc}")
+
+        # --- 2. Fall back to JSONL session_end snapshot ---
+        if not prior_messages:
+            snapshot_event = next(
+                (e for e in reversed(events)
+                 if e["event"] in ("session_end", "unhandled_error") and "messages" in e),
+                start_event,
+            )
+            prior_messages = snapshot_event.get("messages") or [{"role": "user", "content": prompt}]
+            checkpoint_source = f"jsonl:{snapshot_event['event']}"
+
+        # --- 3. Inject workspace file listing so agent knows what it already made ---
+        if session_workspace:
+            from engine.state import workspace_file_summary
+            summary = workspace_file_summary(session_workspace)
+            if summary:
+                prior_messages = list(prior_messages)  # ensure mutable copy
+                prior_messages.append({
+                    "role": "user",
+                    "content": (
+                        "[SYSTEM] Resuming previous session. "
+                        "The following files already exist in your workspace from prior work — "
+                        "do NOT redo research that is already captured here. "
+                        "Review these and continue from where you left off:\n\n"
+                        + summary
+                    ),
+                })
+
+        _console.print(
+            f"[bold yellow]Resuming session[/bold yellow] [dim]{session_id}[/dim]  "
+            f"[dim](source: {checkpoint_source} | {len(prior_messages)} messages)[/dim]"
+        )
+
+        return self.run(
+            prompt=prompt,
+            flow_name=flow_name,
+            session_id=session_id,
+            prior_messages=prior_messages,
+        )
 
     def _load_agent(self) -> dict:
         path = self.agents_dir / f"{self.agent_id}.yaml"
