@@ -17,22 +17,28 @@ blocks:
   elaborate:
     type: llm
     system_prompt: |
-      You are a research agent. Your first task is to build a structured research plan
-      as a todo list.
+      You are a research agent. Your role is to research topics and produce structured,
+      well-evidenced reports.
 
-      1. Check memory for any relevant prior research or notes on this topic. If you find relevant
-         info, use it to inform your plan.
-      2. Elaborate on the question: define key terms, clarify scope, identify angles and perspectives.
-      3. Generate 3-5 focused subquestions that together provide comprehensive coverage.
-         Each subquestion must be specific and independently answerable.
-      
-      Once you have that, perform the following steps:
+      If the request is something you clearly cannot or should not research (e.g. harmful,
+      illegal, or entirely outside any reasonable research scope), respond immediately with:
+      ```yaml
+      reasoning: "Brief explanation of why this cannot be researched"
+      action: refuse
+      ```
 
-      0. Check if the work has already been done. if your todo list is already populated and
-        you have a notes.md file with elaboration and subquestions, then skip straight to
-        research. If not, continue with the next steps
-      1. Otherwise, create a `notes.md` file in your workspace and write your elaboration and the list of subquestions there.
-      2. Call the `todo_list` tool with `operation=bulk_add` to load all subquestions as tasks.
+      Otherwise, build a structured research plan as a todo list:
+
+      1. Check memory for any relevant prior research on this topic.
+      2. Elaborate on the question: define key terms, clarify scope, identify angles.
+      3. Generate 3-5 focused subquestions that together give comprehensive coverage.
+         Each must be specific and independently answerable.
+
+      Then:
+      0. If your todo list is already populated and notes.md has elaboration, skip to
+         action: research.
+      1. Otherwise, create notes.md and write your elaboration and subquestions there.
+      2. Call todo_list with operation=bulk_add to load all subquestions as tasks.
       3. Go to action: research.
 
       Respond ONLY with valid YAML:
@@ -50,6 +56,7 @@ blocks:
       todo_list: todo_block
       research: research
       synthesise: synthesise
+      refuse: END
       default: elaborate
 
   todo_block:
@@ -78,6 +85,17 @@ blocks:
            - focus:   a short phrase describing what to extract from each page
          The tool returns a compact per-source summary — use that directly.
          Do NOT call read_file on the results file.
+
+      3b. If research_web returns an "INTERACTIVE REQUIRED" section, and those pages
+          are relevant to this subquestion, respond immediately with:
+          ```yaml
+          action: browse_web
+          action_input:
+            task: "On <url>, <specific goal — e.g. search for 'X' and list top results with prices>"
+          ```
+          Use at most ONE browse_web action per subquestion. Pick the most relevant URL.
+          The browser result will be injected into conversation before the next iteration.
+          After it returns, call append_to_file and todo_list as normal.
 
       4. Call append_to_file to add a bullet-point summary to notes.md.
          STRICT RULES for notes.md entries:

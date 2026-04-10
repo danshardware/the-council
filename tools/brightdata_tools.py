@@ -240,8 +240,39 @@ def scrape_url(url: str, context: ToolContext) -> str:
 _SKIP_DOMAINS: frozenset[str] = frozenset({
     "facebook.com", "twitter.com", "x.com", "instagram.com",
     "tiktok.com", "pinterest.com", "youtube.com",
-    "amazon.com", "ebay.com", "walmart.com",
 })
+
+# Sites that require interactive browser navigation (login walls, product search, checkout).
+# research_web will flag these rather than skip or attempt a static scrape.
+_INTERACTIVE_DOMAINS: frozenset[str] = frozenset({
+    "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.de", "amazon.fr",
+    "amazon.co.jp", "amazon.com.au",
+    "ebay.com", "ebay.co.uk",
+    "walmart.com",
+    "etsy.com",
+    "alibaba.com", "aliexpress.com",
+    "target.com",
+    "bestbuy.com",
+    "homedepot.com",
+    "wayfair.com",
+    "costco.com",
+})
+
+# Short phrases that indicate a page is a login/registration gate.
+_LOGIN_KEYWORDS: frozenset[str] = frozenset({
+    "sign in to continue", "log in to continue", "please sign in",
+    "please log in", "login required", "you must be logged in",
+    "sign up to access", "register to access", "members only",
+    "create an account to",
+})
+
+
+def _is_login_wall(body: str) -> bool:
+    """Return True if the scraped content is a thin login/registration gate."""
+    if len(body) > 6000:
+        return False
+    lower = body.lower()
+    return any(kw in lower for kw in _LOGIN_KEYWORDS)
 
 
 def _clean_page(content: str, focus_words: set[str], max_chars: int = 4000) -> str:
@@ -403,12 +434,19 @@ def research_web(
     # ── Phase 3: scrape & clean ────────────────────────────────────────────────
     output_sections: list[str] = []
     scraped_titles: list[tuple[str, str, str]] = []
+    interactive_sources: list[tuple[str, str, str]] = []  # (title, url, reason)
 
     for entry in top_entries:
         url = entry["url"]
         title = entry["title"]
         snippet = entry["snippet"]
         header = f"### {title}\nURL: {url}\nSnippet: {snippet}"
+
+        try:
+            domain = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
+        except Exception:
+            domain = ""
+        is_interactive_domain = any(d in domain for d in _INTERACTIVE_DOMAINS)
 
         pre_verdict, _ = pre_scrape(url)
         if pre_verdict != "approved":
@@ -440,6 +478,11 @@ def research_web(
 
         excerpt = _clean_page(body, focus_words, max_chars=4000)
         output_sections.append(f"{header}\n\n{excerpt}")
+
+        # Tag for browser follow-up if it's a known marketplace or if content is a login wall
+        if is_interactive_domain or _is_login_wall(body):
+            reason = "marketplace / product-listing site" if is_interactive_domain else "login-gated page"
+            interactive_sources.append((title, url, reason))
         scraped_titles.append((title, url, excerpt[:300]))
 
     # ── Phase 4: write to workspace file ──────────────────────────────────────
@@ -458,4 +501,12 @@ def research_web(
     lines = [f"Research complete. Found {len(scraped_titles)} sources:\n"]
     for i, (title, url, snippet) in enumerate(scraped_titles, 1):
         lines.append(f"[{i}] {title}\n    {url}\n    {snippet}\n")
+
+    if interactive_sources:
+        lines.append(
+            "\nINTERACTIVE REQUIRED — these pages need browser navigation (browse_web):"
+        )
+        for i, (title, url, reason) in enumerate(interactive_sources, 1):
+            lines.append(f"[{i}] {title}\n    {url}\n    Reason: {reason}\n")
+
     return "\n".join(lines)
