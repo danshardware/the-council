@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -230,3 +231,231 @@ def scrape_url(url: str, context: ToolContext) -> str:
         return f"[FILTERED] Scraped content blocked by safety guardrail: {reason}"
 
     return content
+
+
+# ---------------------------------------------------------------------------
+# Helpers for research_web
+# ---------------------------------------------------------------------------
+
+_SKIP_DOMAINS: frozenset[str] = frozenset({
+    "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "tiktok.com", "pinterest.com", "youtube.com",
+    "amazon.com", "ebay.com", "walmart.com",
+})
+
+
+def _clean_page(content: str, focus_words: set[str], max_chars: int = 4000) -> str:
+    """Strip navigation noise from markdown and return the most relevant portion."""
+    lines = content.split("\n")
+    kept: list[str] = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            if kept and kept[-1]:
+                kept.append("")
+            continue
+        # Skip lines that are pure markdown links (nav items like `[Home](/)`)
+        if re.fullmatch(r"\[.{0,80}\]\([^)]{0,200}\)", s):
+            continue
+        # Skip horizontal rules
+        if re.fullmatch(r"[-*_=]{3,}", s):
+            continue
+        kept.append(s)
+
+    cleaned = "\n".join(kept).strip()
+
+    if not focus_words or len(cleaned) <= max_chars:
+        return cleaned[:max_chars]
+
+    # Score paragraphs by focus keyword density and prefer high-scoring ones
+    paragraphs = [p for p in cleaned.split("\n\n") if p.strip()]
+
+    def _score_para(para: str) -> int:
+        lower = para.lower()
+        return sum(1 for w in focus_words if w in lower)
+
+    # Always keep the intro (first two paragraphs), then fill with highest-scoring
+    intro = paragraphs[:2]
+    rest = paragraphs[2:]
+    scored = sorted(rest, key=_score_para, reverse=True)
+
+    selected = list(intro)
+    total = sum(len(p) for p in selected)
+    for para in scored:
+        cost = len(para) + 2  # +2 for "\n\n"
+        if total + cost > max_chars:
+            break
+        selected.append(para)
+        total += cost
+
+    return "\n\n".join(selected)[:max_chars]
+
+
+# ---------------------------------------------------------------------------
+# research_web tool
+# ---------------------------------------------------------------------------
+
+@tool
+def research_web(
+    queries: list,
+    focus: str = "",
+    max_pages: int = 6,
+    context: ToolContext | None = None,
+) -> str:
+    """
+    Research a topic end-to-end: runs multiple searches, deduplicates URLs, scrapes
+    the top pages, and saves cleaned excerpts to research_results.md in the workspace.
+
+    The entire pipeline is Python — no extra LLM turns are needed.
+
+    Args:
+        queries:   List of search query strings (up to 8).
+        focus:     Short phrase describing what to look for (e.g. "reliability issues").
+        max_pages: Maximum number of pages to scrape (default 6).
+
+    Returns:
+        A brief summary of what was found and the path to the saved results file.
+    """
+    from tools.tool_guardrails import pre_search, post_search, pre_scrape, post_scrape
+
+    if context is None:
+        context = ToolContext(agent_id="", session_id="")
+
+    try:
+        api_key, zone = _credentials()
+    except EnvironmentError as exc:
+        return f"[ERROR] {exc}"
+
+    # Normalise queries — models sometimes pass a JSON string or comma-separated string
+    if isinstance(queries, str):
+        import json as _json
+        try:
+            queries = _json.loads(queries)
+        except Exception:
+            queries = [q.strip() for q in queries.split(",") if q.strip()]
+    queries = [str(q) for q in queries[:8]]
+    if not queries:
+        return "[ERROR] No queries provided."
+
+    focus_words: set[str] = set(re.sub(r"[^\w\s]", "", focus).lower().split()) if focus else set()
+
+    # ── Phase 1: multi-query SERP ──────────────────────────────────────────────
+    seen_urls: set[str] = set()
+    candidates: list[dict] = []
+
+    for query in queries:
+        verdict, _ = pre_search(query)
+        if verdict != "approved":
+            continue
+        cache_key = f"search:{query}"
+        if cache_key in context.fetched_cache:
+            continue
+        context.fetched_cache.add(cache_key)
+
+        search_url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
+        status, body = _post_with_retry(
+            {"url": search_url, "zone": zone, "format": "raw", "data_format": "parsed_light"},
+            api_key,
+        )
+        if status != 200:
+            logger.warning("research_web SERP failed for %r: HTTP %s", query, status)
+            continue
+        try:
+            import json as _json
+            data = _json.loads(body)
+        except Exception:
+            continue
+
+        organic = [
+            item for item in (data.get("organic") or [])
+            if item.get("link") and item.get("title")
+        ]
+        post_verdict, _ = post_search(query, "\n".join(r.get("link", "") for r in organic))
+        if post_verdict != "approved":
+            continue
+
+        for rank, item in enumerate(organic):
+            url = item["link"]
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            domain = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
+            if any(skip in domain for skip in _SKIP_DOMAINS):
+                continue
+            candidates.append({
+                "url": url,
+                "title": item["title"],
+                "snippet": item.get("description", ""),
+                "rank": rank,
+            })
+
+    if not candidates:
+        return "[No search results found for any of the provided queries]"
+
+    # ── Phase 2: score & select top URLs ──────────────────────────────────────
+    def _score_url(entry: dict) -> float:
+        text = (entry["title"] + " " + entry["snippet"]).lower()
+        keyword_bonus = sum(1.0 for w in focus_words if w in text)
+        return keyword_bonus - entry["rank"] * 0.1  # rank 0–9 acts as gentle tie-break
+
+    top_entries = sorted(candidates, key=_score_url, reverse=True)[:max_pages]
+
+    # ── Phase 3: scrape & clean ────────────────────────────────────────────────
+    output_sections: list[str] = []
+    scraped_titles: list[tuple[str, str, str]] = []
+
+    for entry in top_entries:
+        url = entry["url"]
+        title = entry["title"]
+        snippet = entry["snippet"]
+        header = f"### {title}\nURL: {url}\nSnippet: {snippet}"
+
+        pre_verdict, _ = pre_scrape(url)
+        if pre_verdict != "approved":
+            output_sections.append(header + "\n[Page blocked by guardrail — snippet only]")
+            scraped_titles.append((f"{title} (blocked)", url, ""))
+            continue
+
+        cache_key = f"scrape:{url}"
+        if cache_key in context.fetched_cache:
+            output_sections.append(header + "\n[Already scraped this session]")
+            scraped_titles.append((f"{title} (cached)", url, ""))
+            continue
+        context.fetched_cache.add(cache_key)
+
+        status, body = _post_with_retry(
+            {"url": url, "zone": zone, "format": "raw", "data_format": "markdown"},
+            api_key,
+        )
+        if status != 200:
+            output_sections.append(header + f"\n[Scrape failed: HTTP {status}]")
+            scraped_titles.append((f"{title} (failed)", url, ""))
+            continue
+
+        post_verdict, _ = post_scrape(url, body)
+        if post_verdict != "approved":
+            output_sections.append(header + "\n[Content blocked by post-guardrail]")
+            scraped_titles.append((f"{title} (filtered)", url, ""))
+            continue
+
+        excerpt = _clean_page(body, focus_words, max_chars=4000)
+        output_sections.append(f"{header}\n\n{excerpt}")
+        scraped_titles.append((title, url, excerpt[:300]))
+
+    # ── Phase 4: write to workspace file ──────────────────────────────────────
+    full_content = "\n\n---\n\n".join(output_sections)
+
+    if context.allowed_paths:
+        from pathlib import Path as _Path
+        save_path = _Path(context.allowed_paths[0]) / "research_results.md"
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            save_path.write_text(full_content, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("research_web failed to write results file: %s", exc)
+
+    # ── Phase 5: return key excerpts (agent does not need to read the file) ───
+    lines = [f"Research complete. Found {len(scraped_titles)} sources:\n"]
+    for i, (title, url, snippet) in enumerate(scraped_titles, 1):
+        lines.append(f"[{i}] {title}\n    {url}\n    {snippet}\n")
+    return "\n".join(lines)

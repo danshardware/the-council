@@ -1,6 +1,6 @@
 id: web_search
-max_iterations: 30
-start: search_terms
+max_iterations: 5
+start: research
 
 on_error:
   max_iterations:
@@ -8,168 +8,53 @@ on_error:
 
 blocks:
 
-  # ── Phase 1: figure out the search terms to use for a given query ──────────────────
+  # ── Phase 1: multi-query search + scrape (all in Python, no LLM loops) ──────────
 
-  search_terms:
+  research:
     type: llm
     system_prompt: |
-      You will be given a web search that needs to be performed. Your task is to break
-      down the search into up to 5 specific, actionable search terms or subqueries.
+      You are a research assistant. Call research_web once with:
+        - queries: a list of 4–5 targeted search query strings covering the question
+        - focus:   a short phrase describing what to look for in each page
+        - max_pages: 6 (default)
 
-      Consider:
-      - synonyms or related terms that might yield useful results
-      - specific entities, concepts, or questions that are part of the broader topic
+      research_web runs the full pipeline in Python — searching, URL selection,
+      scraping, and saving results to research_results.md in your workspace.
+      It returns a compact per-source summary (not the full file).
 
-      Call todo_list with operation=bulk_add to populate the list with your search terms.
-      That is your ONLY task here. Do NOT call get_next, mark, or perform any searches.
-      Once bulk_add succeeds, you are done — the search phase will handle execution.
-
-    tools:
-      - todo_list
-    transitions:
-      default: search
-
-  # ── Phase 2: Burn through all search terms in one tool-call session ──────────────
-
-  search:
-    type: llm
-    model_id: amazon.nova-lite-v1:0
-    system_prompt: |
-      You are a web search agent. Work through every search term in the todo list.
-
-      Repeat until todo list is ALL_DONE:
-      1. Call todo_list operation=get_next.  If ALL_DONE stop and return action: pick.
-      2. Call search_web with the search term.
-      3. Call append_to_file to append the results to search_results.md:
-         ```
-         ## Query: {search term}
-         {full search results text}
-         ```
-      4. Call todo_list operation=mark item_id=<id> status=done.
-      5. Go back to step 1.
-
-      When ALL_DONE return:
+      After research_web completes, respond ONLY with:
       ```yaml
-      action: pick
+      action: synthesise
       ```
+
+      Only call research_web a second time if the results are clearly missing a
+      critical aspect of the question.
     tools:
-      - todo_list
-      - search_web
-      - append_to_file
+      - research_web
     transitions:
-      default: search
-      pick: pick
-
-  # ── Phase 3: Choose which URLs to scrape ────────────────────────────────────────
-
-  pick:
-    type: llm
-    system_prompt: |
-      You have saved raw search results in search_results.md.
-      Your job: choose the most useful URLs to read in full.
-
-      1. Call read_file to read search_results.md.
-      2. Select up to 8 URLs — prefer expert reviews, reliability studies, owner forums.
-         Avoid duplicates, pure marketing pages, and cached results.
-      3. Call todo_list operation=bulk_add with a list of the selected URLs as items.
-
-      After bulk_add succeeds return:
-      ```yaml
-      action: scrape
-      ```
-    tools:
-      - read_file
-      - todo_list
-    transitions:
-      default: pick
-      scrape: scrape
-
-  # ── Phase 4: Scrape each URL via isolated one-shot block ────────────────────────
-
-  scrape:
-    type: llm
-    model_id: amazon.nova-lite-v1:0
-    system_prompt: |
-      You manage a scraping queue. Each time you are called, do exactly the following:
-
-      1. Call todo_list operation=get_next.
-         - If ALL_DONE → return `action: synthesise`.
-         - Otherwise you get: "Next task — ID <n>: <url>"
-           Remember the ID and URL.
-
-      2. Check the most recent [SYSTEM] message in the conversation.
-         - If it contains "Scraped and summarised <url>" for the URL you just got:
-           a. Call append_to_file to append to notes.md:
-              ```
-              ### Source: <url>
-              <the summary content from the SYSTEM message>
-              ```
-           b. Call todo_list operation=mark item_id=<n> status=done.
-           c. Call todo_list operation=get_next again.
-              - If ALL_DONE → return `action: synthesise`.
-              - Otherwise remember the new ID and URL.
-
-      3. Return:
-         ```yaml
-         action: scrape_and_summarise
-         action_input:
-           url: "<url>"
-           focus: "reliability, common issues, owner experiences"
-         ```
-
-      Never call more than 4 tools per invocation.
-    tools:
-      - append_to_file
-      - todo_list
-    transitions:
-      default: scrape
-      scrape_and_summarise: scrape_and_summarise
+      default: research
       synthesise: synthesise
 
-  # ── Phase 2b: Isolated scrape + summarise (clean context, no history pollution) ────
+  # ── Phase 2: synthesise findings into a final answer ──────────────────────────
 
-  scrape_and_summarise:
-    type: one_shot
-    model_id: amazon.nova-lite-v1:0
-    system_prompt: |
-      You are a focused web research assistant. Your only job is to scrape the provided
-      URL and extract information relevant to the focus question.
-
-      Steps:
-      1. Call scrape_url with the provided URL.
-      2. Read the result and extract ONLY the parts relevant to the focus question.
-      3. Return a concise, factual summary (200-400 words) with key facts and figures.
-         Note the nature of the source (expert review, user review, marketing copy, etc.).
-
-      Respond ONLY with valid YAML:
-      ```yaml
-      summary: "your focused summary here"
-      ```
-    tools:
-      - scrape_url
-    output_key: last_summary
-    transitions:
-      default: scrape
-  
   synthesise:
     type: llm
     system_prompt: |
-      As a web search agent, your task now is to synthesise the information you've gathered in your notes.md file into a comprehensive final result. 
-      This should directly address the original question and provide a clear, structured summary of your findings.
+      The research results are saved in research_results.md in your workspace.
+      Your workspace path is shown below under "You can access files in:".
 
-      Read your notes (notes.md in your workspace) and generate a response that includes:
-        - the answer to the original query based on the information you found
-        - key insights and takeaways from the information you gathered
-        - any relevant context or background information that helps explain the answer
-      
-      Do not include information that is not supported by your notes. If the notes are incomplete, do your best to work with the information you have, but be clear about any limitations or uncertainties in your final response.
+      1. Call read_file with the full path: prepend your workspace path to
+         research_results.md (e.g. workspace/web_search/abc123/research_results.md).
+      2. Synthesise a comprehensive, well-structured answer to the original question.
+         Use only information from the file. Note limitations if content is sparse.
 
       Respond ONLY with valid YAML:
       ```yaml
-      reasoning: "your findings and thought process here"
+      reasoning: "your comprehensive answer here"
       action: done
       ```
     tools:
       - read_file
     transitions:
       default: synthesise
+

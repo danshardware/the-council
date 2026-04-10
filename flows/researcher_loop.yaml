@@ -67,42 +67,44 @@ blocks:
       You are a research agent working through a structured research plan.
 
       ## Workflow — repeat until all subquestions are covered
-      1. Call todo_list with operation=get_next to get your current task (auto-marks it
-         in_progress). If it returns ALL_DONE, go to action: synthesise.
-      2. Search memory for cached info, then use search_web / scrape_url for current data.
-      3. Write your findings for this subquestion to notes.md (append).
-      4. Call todo_list with operation=mark, item_id=<id>, status=done.
-      5. Loop — call get_next again for the next task.
 
-      ## Tool priority for internet research
-      1. **search_web** — always try this first for any search query.
-      2. **scrape_url** — use to fetch the full content of a specific URL when search
-         results are not enough, or when browse_web was blocked by a CAPTCHA.
-      3. **browse_web** — use only when you need to interact with a page (click, fill forms,
-         navigate multi-step flows). Do NOT use it as your first choice just to read static
-         content. You must specify a website to access or it will do nothing. 
-         Do not try to create forum posts or leave comments as part of research. 
-         Don't use it to bypass paywalls or CAPTCHAs 
-         — if you encounter these, switch to scrape_url instead.
+      1. Call todo_list with operation=get_next.
+         If ALL_DONE, respond with `action: synthesise` immediately.
 
-      Be concise and focused. On errors or research roadblocks, note them and move on.
-      Note any limitations or uncertainties in your findings. Ensure any information
-      you cite is accurate and from a reliable source. Do not fabricate information
-      or sources. Annotate any results with a source.
+      2. Optional: call search_memory to check for cached info on this subquestion.
+
+      3. Call research_web with:
+           - queries: 3–4 targeted search strings for this specific subquestion
+           - focus:   a short phrase describing what to extract from each page
+         The tool returns a compact per-source summary — use that directly.
+         Do NOT call read_file on the results file.
+
+      4. Call append_to_file to add a bullet-point summary to notes.md.
+         STRICT RULES for notes.md entries:
+         - Maximum 200 words per subquestion
+         - Bullet points only (no prose paragraphs)
+         - Include source names/URLs inline, not as a separate block
+         - ONLY write to notes.md — do not create any other files
+
+      5. Call todo_list with operation=mark, item_id=<id>, status=done.
+
+      6. Immediately respond:
+         ```yaml
+         action: default
+         ```
+         to start the next iteration. Do not write summaries in your response text.
+
+      When todo_list returns ALL_DONE, respond ONLY with:
+      ```yaml
+      action: synthesise
+      ```
     tools:
       - search_memory
-      - search_web
-      - scrape_url
-      - read_file
-      - write_file
-      - browse_web
+      - research_web
+      - append_to_file
       - todo_list
     transitions:
       search_memory: search_block
-      search_web: search_web_block
-      scrape_url: scrape_url_block
-      read_file: read_block
-      write_file: write_notes_block
       browse_web: check_browse_intent
       todo_list: todo_block
       synthesise: synthesise
@@ -111,18 +113,6 @@ blocks:
   search_block:
     type: tool_call
     tool: search_memory
-    transitions:
-      default: research
-
-  search_web_block:
-    type: tool_call
-    tool: search_web
-    transitions:
-      default: research
-
-  scrape_url_block:
-    type: tool_call
-    tool: scrape_url
     transitions:
       default: research
 
@@ -208,29 +198,27 @@ blocks:
     system_prompt: |
       You are a research agent. All subquestions have been researched.
 
-      Read your notes (notes.md in your workspace) as well as any other files in your 
-      workspace, then write a comprehensive
-      final report to report.md in your workspace that includes:
-        - Introduction framing the research question
-        - One section per subquestion with its findings
-        - A synthesis section drawing connections across subquestions
-        - A conclusion directly answering the main question
-        - Acknowledgement of limitations and areas of uncertainty
+      1. Call read_file to read notes.md from your workspace.
+      2. Optionally call read_file again for any other relevant files.
+      3. Call write_file to write the final report to report.md in your workspace.
+         The report must include:
+           - Introduction framing the research question
+           - One section per subquestion with its findings
+           - A synthesis section drawing connections across subquestions
+           - A conclusion directly answering the main question
+           - Acknowledgement of limitations and areas of uncertainty
 
-      Respond ONLY with valid YAML:
+      After write_file completes, respond ONLY with:
       ```yaml
-      reasoning: "key findings and report structure"
-      action: read_file  # read_file | write_file
-      action_input:
-        # read_file:  {path: "<your_workspace>/notes.md"}
-        # write_file: {path: "<your_workspace>/report.md", content: "full report"}
+      reasoning: "brief summary of what you wrote"
+      action: done
       ```
     tools:
       - read_file
       - write_file
+      - list_files
     transitions:
-      read_file: read_for_synth_block
-      write_file: write_report_block
+      done: post_guard
       default: synthesise
 
   read_for_synth_block:
@@ -268,33 +256,23 @@ blocks:
     system_prompt: |
       The research session ended early due to an error or iteration limit.
 
-      Read your workspace files (plan.md, notes.md) to see what was completed,
-      then write the best final report you can to report.md using whatever
-      information you have already gathered.
+      1. Call read_file to read plan.md and notes.md from your workspace.
+      2. Call write_file to write the best final report you can to report.md.
+         In your report:
+           - Note which subquestions were fully, partially, or not researched.
+           - Include a "## Incomplete Research" section with what was not covered.
+           - Do NOT attempt new web searches.
 
-      In your report:
-        - Note clearly which subquestions were fully researched vs. partially or not at all.
-        - Include a section "## Incomplete Research" listing what was not covered and why.
-        - Do NOT attempt new web searches or tool calls other than read_file / write_file.
-
-      Workflow:
-        1. Use `action: read_file` once or twice to read plan.md and notes.md.
-        2. Use `action: write_file` to write report.md. This is the final step — the
-           session ends immediately after write_file completes. Do not loop.
-
-      Respond ONLY with valid YAML:
+      After write_file completes, respond ONLY with:
       ```yaml
-      reasoning: "what you found in notes and your plan for the report"
-      action: read_file   # read_file | write_file
-      action_input:
-        path: "<your_workspace>/notes.md"   # or report.md for write_file
+      reasoning: "brief summary"
+      action: done
       ```
     tools:
       - read_file
       - write_file
     transitions:
-      read_file: recovery_read
-      write_file: recovery_write
+      done: END
       default: recovery_compile
 
   recovery_read:
