@@ -41,18 +41,7 @@ blocks:
   pre_action_guard:
     type: guardrail
     model_id: us.amazon.nova-lite-v1:0
-    system_prompt: |
-      You are a safety reviewer. Will the proposed action result in ANY of:
-        - Spending real money
-        - Sending external communications (email, SMS, webhooks to outside systems)
-        - Deleting files permanently
-        - Irreversible system changes
-      Spawning a sub-agent or writing internal files does NOT qualify.
-      Respond ONLY with valid YAML:
-      ```yaml
-      verdict: approved  # approved | needs_confirmation | rejected
-      reason: "brief reason"
-      ```
+    system_prompt: "{{{config.guardrails.action_safety}}}"
     transitions:
       approved: delegate_block
       needs_confirmation: human_checkpoint
@@ -107,13 +96,7 @@ blocks:
   post_action_guard:
     type: guardrail
     model_id: us.amazon.nova-lite-v1:0
-    system_prompt: |
-      Review this tool result. Did anything unexpected or concerning happen?
-      Respond ONLY with valid YAML:
-      ```yaml
-      verdict: approved  # approved | flagged
-      reason: "brief reason"
-      ```
+    system_prompt: "{{{config.guardrails.post_action_review}}}"
     transitions:
       approved: think
       flagged: human_checkpoint

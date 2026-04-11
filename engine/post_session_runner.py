@@ -90,15 +90,44 @@ _RECONCILE_SYSTEM = """\
 You are reconciling a new fact against existing memory entries to prevent
 duplication and flag contradictions.
 
-Decide ONE of:
-- "insert"    — this is genuinely new; no existing entry covers it
-- "supersede" — this updates or replaces an existing entry (provide its ID)
-- "flag"      — this contradicts an existing entry; needs human review
+Given a NEW FACT and a list of SIMILAR EXISTING ENTRIES, choose ONE action:
+
+- "skip"      — the new fact is essentially IDENTICAL in substance to an existing
+                entry; it adds no new information and would only create a duplicate.
+                Use this when the new and existing fact say the same thing, even if
+                worded slightly differently.
+
+- "supersede" — the new fact is a more accurate, more specific, or more recent version
+                of EXACTLY the same claim as an existing entry. The existing entry
+                should be replaced because it is now outdated or less precise.
+                Example: existing="a few hundred email subscribers",
+                         new="132 email subscribers" → supersede (more precise value)
+                Example: existing="product is in validation phase",
+                         new="product is entering DFM phase" → supersede (status update)
+
+- "insert"    — the new fact contains genuinely new information not covered by any
+                existing entry. Use this when the new fact and existing entries address
+                DIFFERENT aspects of the same topic — both facts can be true at the
+                same time.
+                Example: new="first run is 50 units", existing="company has <$10k capital"
+                → insert (unrelated claims about the same company)
+
+- "flag"      — the new fact DIRECTLY CONTRADICTS an existing entry and BOTH CANNOT
+                be simultaneously true. Reserve this for clear, unambiguous conflicts
+                (e.g. two different people named as CEO, contradictory founding dates).
+
+Rules of thumb:
+1. When a precise number/value replaces a vague estimate of the SAME metric → supersede.
+2. When the new and existing facts are about DIFFERENT attributes of the same entity → insert.
+3. Only flag when the values are mutually exclusive and the conflict is unambiguous.
+4. When unsure between flag and supersede → supersede.
+5. When unsure between supersede and insert → insert.
+6. When unsure between insert and skip → skip (avoid duplicates).
 
 Respond ONLY with valid YAML:
 ```yaml
 reasoning: "brief explanation"
-action: insert  # insert | supersede | flag
+action: insert  # insert | supersede | skip | flag
 action_input:
   supersede_id: ""   # first 8 chars of entry ID to replace, only if action=supersede
   flag_reason: ""    # description of the contradiction, only if action=flag
@@ -297,7 +326,7 @@ class PostSessionRunner:
             action_taken, detail = self._reconcile_fact(fact, agent_id, session_id)
             _log("post_session_fact", fact=fact[:300], action=action_taken, detail=detail)
             results.append((fact, action_taken, detail))
-            color = {"inserted": "green", "superseded": "yellow", "flagged": "red"}.get(
+            color = {"inserted": "green", "superseded": "yellow", "flagged": "red", "skipped": "dim"}.get(
                 action_taken, "dim"
             )
             _console.print(
@@ -312,7 +341,7 @@ class PostSessionRunner:
         t.add_column("Action", style="bold", width=12)
         t.add_column("Detail", max_width=25)
         for fact, act, detail in results:
-            color = {"inserted": "green", "superseded": "yellow", "flagged": "red"}.get(act, "white")
+            color = {"inserted": "green", "superseded": "yellow", "flagged": "red", "skipped": "dim"}.get(act, "white")
             t.add_row(fact[:65], f"[{color}]{act}[/{color}]", detail[:25])
         _console.print(t)
 
@@ -320,6 +349,7 @@ class PostSessionRunner:
             "inserted": sum(1 for _, a, _ in results if a == "inserted"),
             "superseded": sum(1 for _, a, _ in results if a == "superseded"),
             "flagged": sum(1 for _, a, _ in results if a == "flagged"),
+            "skipped": sum(1 for _, a, _ in results if a == "skipped"),
         }
         _log(
             "post_session_complete",
@@ -333,7 +363,8 @@ class PostSessionRunner:
                 f"Summary stored ✓\n"
                 f"Facts: [green]{counts['inserted']} inserted[/green]  "
                 f"[yellow]{counts['superseded']} superseded[/yellow]  "
-                f"[red]{counts['flagged']} flagged[/red]",
+                f"[red]{counts['flagged']} flagged[/red]  "
+                f"[dim]{counts['skipped']} skipped[/dim]",
                 title="✅  Post-Session Complete",
                 border_style="green",
             )
@@ -453,7 +484,10 @@ class PostSessionRunner:
         action = parsed.get("action", "insert")
         ai = parsed.get("action_input") or {}
 
-        if action == "supersede":
+        if action == "skip":
+            return "skipped", f"dup of {close_hits[0]['id'][:8]}"
+
+        elif action == "supersede":
             target_short = str(ai.get("supersede_id", "")).strip()[:8]
             # Resolve short ID prefix to full ID
             full_id = next(

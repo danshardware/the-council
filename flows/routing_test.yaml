@@ -26,18 +26,7 @@ blocks:
   pre_guard:
     type: guardrail
     model_id: us.amazon.nova-lite-v1:0
-    system_prompt: |
-      You are a safety reviewer. Will the following action result in ANY of:
-        - Spending real money
-        - Sending external communications
-        - Deleting files
-        - Irreversible system changes
-      Almost certainly this is safe research. Approve it.
-      Respond ONLY with valid YAML:
-      ```yaml
-      verdict: approved  # approved | needs_confirmation | rejected
-      reason: "brief reason"
-      ```
+    system_prompt: "{{{config.guardrails.action_safety}}}"
     transitions:
       approved: investigate
       needs_confirmation: human_check

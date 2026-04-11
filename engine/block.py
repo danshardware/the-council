@@ -14,6 +14,7 @@ from rich.text import Text
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pocketflow import Node
 from engine.llm import call_llm
+from engine.template import render_prompt, TemplateRenderError
 from tools import get_tool, ToolContext
 
 _console = Console()
@@ -121,7 +122,7 @@ class LLMBlock(BaseBlock):
     def exec(self, prep_res: dict) -> dict:
         import sys
         messages = list(prep_res.get("messages", []))
-        system_prompt = self.config["system_prompt"]
+        system_prompt = render_prompt(self.config["system_prompt"], prep_res)
         _logger = prep_res.get("logger")
         _block_id = self.block_id
 
@@ -263,6 +264,7 @@ class GuardrailBlock(BaseBlock):
             f"Proposed action: {action}\n"
             f"Action input:\n{yaml.dump(action_input, default_flow_style=False)}"
         )
+        system_prompt = render_prompt(self.config["system_prompt"], prep_res)
         if sys.stdout.isatty():
             with _console.status(
                 f"[dim]⏳ {self.block_id} → reviewing '{action}'…[/dim]",
@@ -270,13 +272,13 @@ class GuardrailBlock(BaseBlock):
             ):
                 parsed, in_tok, out_tok = call_llm(
                     model_id=self._model_id,
-                    system_prompt=self.config["system_prompt"],
+                    system_prompt=system_prompt,
                     messages=[{"role": "user", "content": user_msg}],
                 )
         else:
             parsed, in_tok, out_tok = call_llm(
                 model_id=self._model_id,
-                system_prompt=self.config["system_prompt"],
+                system_prompt=system_prompt,
                 messages=[{"role": "user", "content": user_msg}],
             )
         parsed["_in_tokens"] = in_tok
@@ -499,8 +501,131 @@ class HumanReplyBlock(BaseBlock):
 
 
 # ---------------------------------------------------------------------------
-# Factory
+# SetState block — writes a value from shared into another shared key
 # ---------------------------------------------------------------------------
+
+_FORBIDDEN_WRITE_KEYS: frozenset[str] = frozenset({
+    "logger",
+    "tool_context",
+    "agent_config",
+    "messages",
+    "iteration",
+    "block_visits",
+    "max_iterations",
+    "session_id",
+    "agent_id",
+    "logs_dir",
+})
+
+
+def _get_nested(obj: Any, path: str) -> Any:
+    """Traverse obj using dot-notation. Raises KeyError if any segment is missing."""
+    for part in path.split("."):
+        if isinstance(obj, dict):
+            if part not in obj:
+                raise KeyError(f"Key '{part}' not found (path: '{path}')")
+            obj = obj[part]
+        elif isinstance(obj, list):
+            try:
+                obj = obj[int(part)]
+            except (ValueError, IndexError) as exc:
+                raise KeyError(f"Index '{part}' invalid (path: '{path}')") from exc
+        else:
+            raise KeyError(
+                f"Cannot traverse into '{type(obj).__name__}' at '{part}' (path: '{path}')"
+            )
+    return obj
+
+
+def _set_nested(obj: dict, path: str, value: Any, merge: bool) -> None:
+    """Write value into a nested dict using dot-notation, creating intermediate dicts."""
+    parts = path.split(".")
+    root = parts[0]
+    if root in _FORBIDDEN_WRITE_KEYS or root.startswith("_"):
+        raise ValueError(f"Writing to state key '{root}' is not allowed")
+    # Traverse to parent container
+    for part in parts[:-1]:
+        if part not in obj or not isinstance(obj[part], dict):
+            obj[part] = {}
+        obj = obj[part]
+    leaf = parts[-1]
+    existing = obj.get(leaf)
+    if merge and isinstance(existing, dict) and isinstance(value, dict):
+        existing.update(value)
+    else:
+        obj[leaf] = value
+
+
+class SetStateBlock(BaseBlock):
+    """
+    Writes a value from shared state (via a dot-notation source path) to another
+    shared state key (dot-notation target path).
+
+    Config fields:
+        key     (required) — dot-notation write target in shared
+        source  (optional) — dot-notation read path in shared
+                             defaults to: action_input.<leaf of key>
+        merge   (optional) — for dict values, merge into existing dict (default: true)
+
+    Transitions:
+        set   — value was resolved and is non-empty/non-None
+        empty — value is None, "", [], or {}
+        error — source path not found (only if wired; otherwise raises)
+    """
+
+    def prep(self, shared: dict) -> dict:
+        self._check_iterations(shared)
+        self._log(shared, "block_enter", iteration=shared["iteration"])
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> dict:
+        key: str = self.config["key"]
+        default_source = f"action_input.{key.split('.')[-1]}"
+        source: str = self.config.get("source") or default_source
+        merge: bool = self.config.get("merge", True)
+
+        try:
+            value = _get_nested(prep_res, source)
+        except KeyError as exc:
+            if "error" in self.config.get("transitions", {}):
+                return {"_transition": "error", "_error": str(exc)}
+            raise
+
+        return {"_key": key, "_value": value, "_merge": merge}
+
+    def post(self, shared: dict, prep_res: dict, exec_res: dict) -> str:
+        if exec_res.get("_transition") == "error":
+            err = exec_res["_error"]
+            self._log(shared, "set_state_error", error=err)
+            _console.print(
+                Panel(
+                    f"[red]Source not found:[/red] {err}",
+                    title=f"📝  SetState • {self.block_id}",
+                    border_style="red",
+                )
+            )
+            return "error"
+
+        key: str = exec_res["_key"]
+        value: Any = exec_res["_value"]
+        merge: bool = exec_res["_merge"]
+
+        _set_nested(shared, key, value, merge)
+        self._log(shared, "set_state", key=key, value=str(value)[:200])
+
+        is_empty = value is None or value == "" or value == [] or value == {}
+        transition = "empty" if is_empty else "set"
+
+        _console.print(
+            Panel(
+                f"[bold]{key}[/bold] ← {repr(value)[:200]}\n[dim]→ {transition}[/dim]",
+                title=f"📝  SetState • {self.block_id}",
+                border_style="dim" if is_empty else "cyan",
+            )
+        )
+        return transition
+
+
 
 BLOCK_TYPES = {
     "llm": LLMBlock,
@@ -509,6 +634,7 @@ BLOCK_TYPES = {
     "checkpoint": CheckpointBlock,
     "human_input": HumanInputBlock,
     "human_reply": HumanReplyBlock,
+    "set_state": SetStateBlock,
 }
 
 

@@ -23,6 +23,8 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from engine.flow_loader import load_flow
+from engine.template import render_prompt, TemplateRenderError
+from engine.runner import _load_context_files
 from tools import ToolContext, get_tool
 
 console = Console()
@@ -35,30 +37,44 @@ def build_system_prompt(
     block_id: str,
     block_config: dict,
     agent_config: dict,
-    context_injection: str = "",
     session_id: str = PREVIEW_SESSION_ID,
 ) -> str:
     """Replicate the system-prompt assembly in LLMBlock.exec without calling Bedrock."""
-    system_prompt: str = block_config["system_prompt"]
+    # Build a minimal mock shared state for template rendering
+    base_paths: list[str] = agent_config.get("permissions", {}).get("workspace_paths", [])
+    allowed_paths = [str(Path(p.rstrip("/")) / session_id) + "/" for p in base_paths]
+    shared: dict = {
+        "agent_id": agent_config.get("id", "unknown"),
+        "session_id": session_id,
+        "iteration": 0,
+        "action": None,
+        "action_input": {},
+        "messages": [],
+        "initial_prompt": "",
+    }
+
+    # 0. Render Mustache template variables
+    try:
+        system_prompt = render_prompt(block_config["system_prompt"], shared)
+    except TemplateRenderError as exc:
+        system_prompt = block_config["system_prompt"]
+        console.print(f"[yellow]Warning: template render failed for block '{block_id}': {exc}[/yellow]")
 
     # 1. Prepend context_injection (shared_knowledge files)
+    context_injection = _load_context_files(agent_config)
     if context_injection:
         system_prompt = context_injection.rstrip() + "\n\n" + system_prompt
 
     # 2. Inject workspace paths — mirrors runner.py (session-scoped) + block.py formatting
-    base_paths: list[str] = agent_config.get("permissions", {}).get("workspace_paths", [])
-    # runner.py appends session_id to each base path
-    allowed_paths = [str(Path(p.rstrip("/")) / session_id) + "/" for p in base_paths]
     if allowed_paths:
         paths_str = ", ".join(f"`{p}`" for p in allowed_paths)
-        session_path = paths_str  # already session-scoped; matches block.py behaviour
         system_prompt = (
             system_prompt.rstrip()
             + f"\n\nYou can access files in: {paths_str}"
-            + f"\nYour session working directory is: {session_path}\n"
+            + f"\nYour session working directory is: {paths_str}\n"
         )
 
-    # 3. Append ## Available Tools
+    # 3. Append ## Available Tools (llm blocks only)
     tool_names: list[str] = block_config.get("tools", [])
     if tool_names:
         ctx = ToolContext(
@@ -108,25 +124,27 @@ def check_agent(agent_id: str, block_id: str | None) -> None:
             console.print(f"[yellow]Block '{bid}' not found in flow '{flow_alias}'[/yellow]")
             continue
         cfg = blocks[bid]
-        if cfg.get("type") != "llm":
-            console.print(f"[dim]Skipping block '{bid}' (type={cfg.get('type')})[/dim]")
+        block_type = cfg.get("type")
+        if block_type not in ("llm", "guardrail"):
+            console.print(f"[dim]Skipping block '{bid}' (type={block_type})[/dim]")
+            continue
+        if "system_prompt" not in cfg:
+            console.print(f"[dim]Skipping block '{bid}' (no system_prompt)[/dim]")
             continue
 
         prompt = build_system_prompt(
             block_id=bid,
             block_config=cfg,
             agent_config=agent_config,
-            context_injection="",  # context_files would be loaded at runtime; omit here
         )
 
-        console.print(Rule(f"[bold cyan]{agent_id}[/bold cyan] › [yellow]{bid}[/yellow]"))
+        console.print(Rule(f"[bold cyan]{agent_id}[/bold cyan] › [yellow]{bid}[/yellow] [dim]({block_type})[/dim]"))
         console.print(Panel(prompt, expand=True, border_style="dim"))
         char_count = len(prompt)
         tool_section_start = prompt.find("## Available Tools")
-        manual_above = prompt[:tool_section_start].count("\n") if tool_section_start != -1 else "N/A"
         console.print(
             f"  [dim]Total chars: {char_count} | "
-            f"Auto-injected tools: {len(cfg.get('tools', []))} | "
+            f"Tools: {len(cfg.get('tools', []))} | "
             f"Tool section at char {tool_section_start}[/dim]\n"
         )
 

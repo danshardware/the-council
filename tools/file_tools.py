@@ -4,11 +4,22 @@ from pathlib import Path
 from tools import ToolContext, tool
 
 
+def _is_private_path(path: Path) -> bool:
+    """Return True if any segment of the path starts with '_' or '.' (private/system paths)."""
+    return any(part.startswith("_") or part.startswith(".") for part in path.parts)
+
+
 def _assert_path_allowed(path: str, context: ToolContext) -> Path:
     """Resolve path and verify it is under one of context.allowed_paths. Raises PermissionError if not."""
     resolved = Path(path).resolve()
     for allowed in context.allowed_paths:
         if resolved.is_relative_to(Path(allowed).resolve()):
+            # Check each segment relative to the allowed root for private prefixes
+            rel = resolved.relative_to(Path(allowed).resolve())
+            if _is_private_path(rel):
+                raise PermissionError(
+                    f"Path '{path}' refers to a private or system path (segments starting with '_' or '.' are reserved)."
+                )
             return resolved
     raise PermissionError(f"Path '{path}' is outside allowed paths: {context.allowed_paths}")
 
@@ -52,8 +63,12 @@ def list_files(path: str, context: ToolContext) -> str:
     try:
         resolved = _assert_path_allowed(path, context)
         paths = []
-        for root, _, files in os.walk(resolved):
+        for root, dirs, files in os.walk(resolved):
+            # Prune private directories in-place so os.walk won't descend into them
+            dirs[:] = [d for d in dirs if not d.startswith("_") and not d.startswith(".")]
             for filename in files:
+                if filename.startswith("_") or filename.startswith("."):
+                    continue
                 full = Path(root) / filename
                 paths.append(str(full.relative_to(resolved)))
         return "\n".join(paths) if paths else "(empty)"

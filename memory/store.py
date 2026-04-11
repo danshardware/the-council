@@ -113,7 +113,13 @@ class MemoryStore:
         Returns list of {id, content, metadata, distance} dicts sorted by relevance.
         """
         target_realms = [realm] if realm else list(_REALMS)
-        target_topics = [topic] if topic else self._find_relevant_topics(query, top_k=5)
+        if topic:
+            target_topics: list[str] = [topic]
+        else:
+            try:
+                target_topics = self._find_relevant_topics(query, top_k=5)
+            except Exception:
+                target_topics = []  # fall back to unfiltered search across all realms
 
         results: list[dict[str, Any]] = []
         for r in target_realms:

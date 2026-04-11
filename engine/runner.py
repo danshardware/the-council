@@ -192,12 +192,13 @@ class AgentRunner:
                     total_iterations=shared["iteration"],
                 )
 
-        _console.print(Rule("[dim]Session complete[/dim]"))
+            # Post-session: summarise conversation + reconcile facts into memory.
+            # Must run inside the `with logger` block so the file handle is still open.
+            if agent_config.get("post_session_flow") and not shared.get("suspended"):
+                from engine.post_session_runner import PostSessionRunner
+                PostSessionRunner().run_after_session(shared)
 
-        # Post-session: summarise conversation + reconcile facts into memory
-        if agent_config.get("post_session_flow") and not shared.get("suspended"):
-            from engine.post_session_runner import PostSessionRunner
-            PostSessionRunner().run_after_session(shared)
+        _console.print(Rule("[dim]Session complete[/dim]"))
 
         return shared
 

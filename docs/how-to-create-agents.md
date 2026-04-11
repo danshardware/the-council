@@ -185,6 +185,94 @@ transitions:
   rejected: fallback_block
 ```
 
+### `human_reply`
+Displays the agent's message and reads a free-text reply from the user. The reply is appended to `messages` and the block returns `replied`.
+
+```yaml
+type: human_reply
+transitions:
+  replied: next_block
+```
+
+The message to display is read from `action_input.message` (set by the preceding LLM block).
+
+### `set_state`
+Writes a value from shared state into another shared state key — no LLM call. Useful for extracting a field from `action_input` and promoting it to a named top-level variable that later blocks or template variables can reference.
+
+```yaml
+type: set_state
+key: current_task               # dot-notation write target in shared state
+source: action_input.task       # dot-notation read path in shared state
+                                # default: action_input.<leaf of key>
+merge: true                     # for dict values: merge into existing dict (default: true)
+                                # set to false to replace entirely
+transitions:
+  set: next_block               # value was non-empty/non-None
+  empty: fallback_block         # value was None, "", [], or {}
+  error: handle_missing         # source path not found (optional; raises if omitted)
+```
+
+**Source path** defaults to `action_input.<leaf segment of key>`. For `key: current_task` the default source is `action_input.current_task`. Use `source:` to read from anywhere in shared state using dot-notation (e.g. `action_input.details.name`, `context.target`).
+
+**Forbidden write targets:** `logger`, `tool_context`, `agent_config`, `messages`, `iteration`, `block_visits`, `max_iterations`, `session_id`, `agent_id`, `logs_dir`, and any `_`-prefixed key. Writing to these raises a `ValueError`.
+
+**Example — LLM sets a task, `set_state` promotes it:**
+
+```yaml
+  think:
+    type: llm
+    system_prompt: |
+      Decide the next task.
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "..."
+      action: assign_task
+      action_input:
+        current_task: "research competitors"
+      ```
+    transitions:
+      assign_task: store_task
+      default: think
+
+  store_task:
+    type: set_state
+    key: current_task
+    transitions:
+      set: execute_task
+      empty: think
+```
+
+---
+
+## Template variables in system prompts
+
+System prompts in flow YAMLs support [Mustache](https://mustache.github.io/) template syntax. Variables are resolved dynamically on every block execution, so state changes mid-flow are reflected immediately.
+
+Two namespaces are available:
+
+| Syntax | Source |
+|--------|--------|
+| `{{state.key}}` | Shared state (flat or nested dot-notation) |
+| `{{config.file.key}}` | `config/<file>.yaml` keyed by file stem then YAML path |
+
+```yaml
+system_prompt: |
+  You are {{state.agent_id}}.
+  Current task: {{state.current_task}}
+  Daily schedule: {{config.schedules.daily_run_time}}
+
+  Pending items:
+  {{#state.todo_list}}
+  - {{.}}
+  {{/state.todo_list}}
+```
+
+Full Mustache is supported — sections (`{{#key}}…{{/key}}`), inverted sections, lambdas, partials etc.
+
+**Protected state keys** are never exposed to templates: `logger`, `tool_context`, `agent_config`, and any `_`-prefixed key.
+
+If a referenced variable is missing an error is raised and propagated to the runner's standard error handler. Prompts with no `{{` tokens are passed through unchanged (zero overhead).
+
 ---
 
 ## Transitions and control flow
@@ -195,9 +283,7 @@ transitions:
 - Always include `default:` on `llm` and `guardrail` blocks; if missing, an unexpected LLM output will terminate the flow silently
 - Cycles are fine — e.g., `think → tool_call → think` is the standard research loop
 
----
 
-## Iteration guards
 
 Two independent guards prevent infinite loops:
 1. **Session-level**: `max_iterations` (lowest of agent and flow caps). Each block visit increments the counter.
