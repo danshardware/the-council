@@ -77,11 +77,11 @@ class TestMaxVisits:
 class TestWarningMessage:
 
     def test_warning_injected_at_warn_buffer(self):
-        """Warning should appear when iteration >= max_iter - 10."""
+        """Warning should appear when iteration >= max_iter - max(3, max_iter//10)."""
         block = _make_block()
-        shared = _shared(max_iterations=15)
-        # Drive iteration to 5 (= 15 - 10)
-        for _ in range(5):
+        shared = _shared(max_iterations=15)  # buffer = max(3, 1) = 3 → threshold = 12
+        # Drive iteration to 12 (= 15 - 3)
+        for _ in range(12):
             block._check_iterations(shared)
         assert shared.get("_iteration_warned") is True
         system_msgs = [m for m in shared["messages"] if "[SYSTEM]" in m["content"]]
@@ -91,10 +91,13 @@ class TestWarningMessage:
     def test_warning_injected_only_once(self):
         """Warning must not stack up across multiple near-limit iterations."""
         block = _make_block()
-        shared = _shared(max_iterations=15)
-        for _ in range(8):  # well into warning zone
-            block._check_iterations(shared)
-        system_msgs = [m for m in shared["messages"] if "[SYSTEM]" in m["content"]]
+        shared = _shared(max_iterations=15)  # buffer = 3 → threshold = 12
+        for _ in range(14):  # well into warning zone (but before hard stop)
+            try:
+                block._check_iterations(shared)
+            except Exception:
+                break
+        system_msgs = [m for m in shared["messages"] if "approaching" in m["content"].lower()]
         assert len(system_msgs) == 1
 
     def test_no_warning_before_threshold(self):

@@ -116,6 +116,8 @@ class AgentRunner:
             "action": None,
             "action_input": {},
             "messages": initial_messages,
+            "_conv": None,
+            "_conv_turns": list(initial_messages),
             "initial_prompt": prompt,
             "_todo_list": _todo_list,
             "context_injection": _load_context_files(agent_config),
@@ -251,7 +253,7 @@ class AgentRunner:
             if cp_path:
                 try:
                     cp_data = _load_cp(cp_path)
-                    prior_messages = cp_data.get("messages")
+                    prior_messages = cp_data.get("_conv_turns") or cp_data.get("messages")
                     resume_from_block = cp_data.get("_last_block_id")
                     resume_todo_list = cp_data.get("_todo_list")
                     checkpoint_source = cp_path.name

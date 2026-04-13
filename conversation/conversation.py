@@ -206,7 +206,39 @@ class Message:
             "role": self.role,
             "content": self.content
         }
-    
+
+
+# ---------------------------------------------------------------------------
+# Conversation-slicing helpers (used by call_model)
+# ---------------------------------------------------------------------------
+
+def _find_tool_free_boundary(turns: list, gap: int = 4) -> int:
+    """Return the first index of a run of `gap` consecutive turns with no
+    toolUse or toolResult content.  Falls back to 0 (keep everything) when
+    no such run exists."""
+    def _has_tool(msg) -> bool:
+        return any(
+            "toolUse" in item or "toolResult" in item
+            for item in (msg.content or [])
+        )
+    for i in range(max(0, len(turns) - gap + 1)):
+        if not any(_has_tool(turns[i + j]) for j in range(gap)):
+            return i
+    return 0
+
+
+def _align_tail(turns: list, n: int) -> list:
+    """Return the last n turns, advancing the start index forward past any
+    leading toolResult turns to avoid sending an orphaned tool-result to
+    Bedrock without its paired toolUse."""
+    start = max(0, len(turns) - n)
+    while start < len(turns) and any(
+        "toolResult" in item for item in turns[start].content
+    ):
+        start += 1
+    return turns[start:]
+
+
 class Conversation:
     """Manages a multi-turn conversation with AWS Bedrock LLM models.
     
@@ -344,7 +376,10 @@ class Conversation:
 
     _MAX_TOOL_CALLS_PER_TURN = 40
 
-    def call_model(self, messages: list[Message] | None = None, tool_event_log: list | None = None, tool_callback=None, _tool_call_count: list[int] | None = None) -> tuple[str, str]:
+    def call_model(self, messages: list[Message] | None = None, 
+                   tool_event_log: list | None = None,
+                   tool_callback=None, _tool_call_count: list[int] | None = None,
+                   context_window: int | None = None, include_tools: bool = True) -> tuple[str, str]:
         """Call the AWS Bedrock API with the current conversation.
         
         Makes an API call to the configured Bedrock model, handling tool use if the model
@@ -363,11 +398,19 @@ class Conversation:
         Raises:
             Various AWS Bedrock exceptions if the API call fails.
         """
+        _is_top_level = _tool_call_count is None
         if _tool_call_count is None:
             _tool_call_count = [0]
         bedrock_client = boto3.client(service_name='bedrock-runtime', config=_BEDROCK_CONFIG)
         if messages is None:
-            conversation = [m.to_dict() for m in self.conversation]
+            turns = self.conversation
+            if _is_top_level:
+                if not include_tools:
+                    boundary = _find_tool_free_boundary(turns)
+                    turns = turns[boundary:]
+                if context_window is not None and context_window < len(turns):
+                    turns = _align_tail(turns, context_window)
+            conversation = [m.to_dict() for m in turns]
         else:
             conversation = [m.to_dict() for m in messages]
         

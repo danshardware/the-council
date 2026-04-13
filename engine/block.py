@@ -13,11 +13,20 @@ from rich.text import Text
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pocketflow import Node
-from engine.llm import call_llm
+from engine.llm import call_llm, call_llm_conv
 from engine.template import render_prompt, TemplateRenderError
+from conversation.conversation import Conversation, Message
 from tools import get_tool, ToolContext
 
 _console = Console()
+
+
+def _push_message(shared: dict, role: str, content: str) -> None:
+    """Append a turn to shared['messages'] (log) and mirror into the live Conversation."""
+    shared.setdefault("messages", []).append({"role": role, "content": content})
+    conv: Conversation | None = shared.get("_conv")
+    if conv is not None:
+        conv.conversation.append(Message(role, text=content))
 
 
 class MaxIterationsError(Exception):
@@ -61,14 +70,12 @@ class BaseBlock(Node):
         if not shared.get("_iteration_warned") and iteration >= max_iter - _WARN_BUFFER:
             shared["_iteration_warned"] = True
             remaining = max_iter - iteration
-            shared.setdefault("messages", []).append({
-                "role": "user",
-                "content": (
-                    f"[SYSTEM] Warning: you are approaching the iteration limit. "
-                    f"Approximately {remaining} turns remain. Begin consolidating your "
-                    "findings and move toward writing your final output now."
-                ),
-            })
+            _push_message(
+                shared, "user",
+                f"[SYSTEM] Warning: you are approaching the iteration limit. "
+                f"Approximately {remaining} turns remain. Begin consolidating your "
+                "findings and move toward writing your final output now.",
+            )
 
         # --- Grace period: 3 wrap-up turns before hard stop ---
         if iteration > max_iter:
@@ -76,15 +83,13 @@ class BaseBlock(Node):
                 # First overflow — activate grace period
                 shared["_grace_mode"] = True
                 shared["max_iterations"] = iteration + 2  # activation turn + 2 more = 3 total
-                shared.setdefault("messages", []).append({
-                    "role": "user",
-                    "content": (
-                        "[SYSTEM] You have reached the iteration limit. "
-                        "You have exactly 3 turns left. "
-                        "Write your final output now using whatever information you have "
-                        "already gathered — do not start any new tasks. Make sure the to mention you had more work to do if need be."
-                    ),
-                })
+                _push_message(
+                    shared, "user",
+                    "[SYSTEM] You have reached the iteration limit. "
+                    "You have exactly 3 turns left. "
+                    "Write your final output now using whatever information you have "
+                    "already gathered — do not start any new tasks. Make sure the to mention you had more work to do if need be.",
+                )
             else:
                 # Grace period exhausted → hard stop
                 raise MaxIterationsError(
@@ -121,7 +126,6 @@ class LLMBlock(BaseBlock):
 
     def exec(self, prep_res: dict) -> dict:
         import sys
-        messages = list(prep_res.get("messages", []))
         system_prompt = render_prompt(self.config["system_prompt"], prep_res)
         _logger = prep_res.get("logger")
         _block_id = self.block_id
@@ -156,29 +160,56 @@ class LLMBlock(BaseBlock):
                 lines.append(f"- **{spec['name']}**({params}) — {spec.get('description', '')}")
             system_prompt = system_prompt.rstrip() + "\n" + "\n".join(lines) + "\n"
 
+        # Get or create the persistent Conversation object for this session
+        conv: Conversation | None = prep_res.get("_conv")
+        if conv is None:
+            # First call this session — create fresh and seed from serialized turns
+            conv = Conversation(
+                model_id=self._model_id,
+                system_prompts=system_prompt,
+                tools=self._tools or [],
+            )
+            for turn in prep_res.get("_conv_turns", []):
+                content = turn.get("content", [])
+                if isinstance(content, str):
+                    conv.conversation.append(Message(turn["role"], text=content))
+                else:
+                    conv.conversation.append(Message(turn["role"], content=content))
+        else:
+            # Reuse existing — update mutable config for this turn
+            conv.system_prompts = [{"text": system_prompt}]
+            conv.tools = {bt.name: bt for bt in (self._tools or [])}
+            conv.model_id = self._model_id
+
+        # Bedrock requires the conversation to end on a user turn
+        while conv.conversation and conv.conversation[-1].role == "assistant":
+            conv.conversation.pop()
+
+        context_window: int | None = self.config.get("context_window")
+        include_tools: bool = self.config.get("include_tools", True)
+
         is_tty = sys.stdout.isatty()
         if is_tty:
             with _console.status(
                 f"[dim]⏳ {self.block_id} → {self._model_id.split('.')[-1]}…[/dim]",
                 spinner="dots",
             ):
-                parsed, in_tok, out_tok = call_llm(
-                    model_id=self._model_id,
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    tools=self._tools or None,
+                parsed, in_tok, out_tok = call_llm_conv(
+                    conv=conv,
+                    context_window=context_window,
+                    include_tools=include_tools,
                     tool_callback=_tool_callback,
                 )
         else:
-            parsed, in_tok, out_tok = call_llm(
-                model_id=self._model_id,
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=self._tools or None,
+            parsed, in_tok, out_tok = call_llm_conv(
+                conv=conv,
+                context_window=context_window,
+                include_tools=include_tools,
                 tool_callback=_tool_callback,
             )
         parsed["_in_tokens"] = in_tok
         parsed["_out_tokens"] = out_tok
+        parsed["_conv"] = conv
         return parsed
 
     def post(self, shared: dict, prep_res: dict, exec_res: dict) -> str:
@@ -187,29 +218,32 @@ class LLMBlock(BaseBlock):
         out_tok = exec_res.pop("_out_tokens", 0)
         raw_response = exec_res.pop("_raw_response", "")
         exec_res.pop("_tool_calls", [])  # already logged in real-time via tool_callback
+        conv: Conversation = exec_res.pop("_conv")
 
         shared["action"] = action
         shared["action_input"] = exec_res.get("action_input", {})
 
-        # Append a clean human-readable summary so conversation history stays useful
+        # Persist the live Conversation and its serialized turns (written to checkpoint)
+        shared["_conv"] = conv
+        shared["_conv_turns"] = [m.to_dict() for m in conv.conversation]
+
+        # Append a human-readable summary to messages (for JSONL log / post-session only)
         reasoning = exec_res.get("reasoning", "")
         summary = f"[{self.block_id}] action={action}"
         if reasoning:
             summary += f" | {reasoning[:300]}"
         elif raw_response and action == "default":
-            # Parsing failed — include raw text so next iteration has some context
+            # Parsing failed — include raw text so post-session has some context
             summary += f" | (unparsed) {raw_response[:300]}"
-        # Strip to avoid Bedrock validation errors on trailing whitespace
         summary = summary.strip()
         shared["messages"].append({"role": "assistant", "content": summary})
 
-        # Keep conversation history bounded to avoid context bloat (keep first user msg + last 11)
+        # Keep the log list bounded (LLM no longer reads shared['messages'])
         messages = shared["messages"]
         if len(messages) > 12:
             shared["messages"] = [messages[0]] + messages[-11:]
 
-        # Auto-checkpoint after every LLM turn so resume() has a per-turn snapshot.
-        # Best-effort — a failure here must never crash the agent.
+        # Auto-checkpoint — _conv_turns now contains full-fidelity history
         try:
             tc = shared.get("tool_context")
             if tc and getattr(tc, "allowed_paths", None):
@@ -302,14 +336,12 @@ class GuardrailBlock(BaseBlock):
 
         if verdict != "approved":
             # Inject system message so the agent knows the action was blocked
-            shared["messages"].append({
-                "role": "user",
-                "content": (
-                    f"[SYSTEM] Your proposed action '{shared.get('action')}' "
-                    f"was {verdict} by the safety guardrail. Reason: {reason}. "
-                    "Please reconsider."
-                ),
-            })
+            _push_message(
+                shared, "user",
+                f"[SYSTEM] Your proposed action '{shared.get('action')}' "
+                f"was {verdict} by the safety guardrail. Reason: {reason}. "
+                "Please reconsider.",
+            )
 
         reviewing_action = prep_res.get("action", "?")
         style = "green" if verdict == "approved" else "red"
@@ -363,10 +395,10 @@ class ToolCallBlock(BaseBlock):
             tool=exec_res["tool"],
             duration_ms=exec_res["duration_ms"],
         )
-        shared["messages"].append({
-            "role": "user",
-            "content": f"[SYSTEM] Tool '{exec_res['tool']}' result: {exec_res['result']}",
-        })
+        _push_message(
+            shared, "user",
+            f"[SYSTEM] Tool '{exec_res['tool']}' result: {exec_res['result']}",
+        )
         _console.print(
             Panel(
                 f"[bold]{exec_res['tool']}[/bold] [dim]({exec_res['duration_ms']}ms)[/dim]\n"
@@ -465,10 +497,7 @@ class HumanInputBlock(BaseBlock):
     def post(self, shared: dict, prep_res: dict, exec_res: str) -> str:
         verdict = "approved" if exec_res in ("y", "yes", "approved") else "rejected"
         self._log(shared, "human_input_received", verdict=verdict, raw=exec_res)
-        shared["messages"].append({
-            "role": "user",
-            "content": f"[HUMAN] Response to confirmation request: {verdict}",
-        })
+        _push_message(shared, "user", f"[HUMAN] Response to confirmation request: {verdict}")
         return verdict
 
 
@@ -496,7 +525,7 @@ class HumanReplyBlock(BaseBlock):
 
     def post(self, shared: dict, prep_res: dict, exec_res: str) -> str:
         self._log(shared, "human_reply", text=exec_res)
-        shared["messages"].append({"role": "user", "content": f"[HUMAN] {exec_res}"})
+        _push_message(shared, "user", f"[HUMAN] {exec_res}")
         return "replied"
 
 

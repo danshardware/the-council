@@ -99,6 +99,67 @@ def _call_once(
     return parsed, conv.input_tokens, conv.output_tokens
 
 
+def call_llm_conv(
+    conv: "Conversation",
+    context_window: int | None = None,
+    include_tools: bool = True,
+    tool_event_log: list | None = None,
+    tool_callback=None,
+    max_retries: int = 3,
+) -> tuple[dict[str, Any], int, int]:
+    """Call Bedrock using a persistent Conversation object (reused across turns).
+
+    Handles retries for transient errors, rolling back conversation state on
+    each failure so the object remains clean for the next attempt.
+
+    Returns (parsed, input_tokens_delta, output_tokens_delta).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        # Snapshot state for rollback
+        conv_len = len(conv.conversation)
+        tok_in_before = conv.input_tokens
+        tok_out_before = conv.output_tokens
+        try:
+            tool_calls: list = tool_event_log if tool_event_log is not None else []
+            _role, text = conv.call_model(
+                tool_event_log=tool_calls,
+                tool_callback=tool_callback,
+                context_window=context_window,
+                include_tools=include_tools,
+            )
+            text = text.strip()
+            parsed = _parse_yaml_response(text)
+            parsed["_raw_response"] = text
+            parsed["_tool_calls"] = tool_calls
+            return (
+                parsed,
+                conv.input_tokens - tok_in_before,
+                conv.output_tokens - tok_out_before,
+            )
+        except Exception as exc:
+            # Rollback conversation and token state before any retry
+            del conv.conversation[conv_len:]
+            conv.input_tokens = tok_in_before
+            conv.output_tokens = tok_out_before
+            exc_name = type(exc).__name__
+            exc_str = str(exc)
+            is_transient = any(r in exc_str or r in exc_name for r in _RETRY_EXCEPTIONS)
+            if is_transient and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[llm] Transient error ({exc_name}), retrying in {wait}s… "
+                      f"(attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+                last_exc = exc
+            elif is_transient:
+                raise LLMUnavailableError(
+                    f"LLM unavailable after {max_retries} attempts: {exc_name}: {exc_str}"
+                ) from exc
+            else:
+                raise
+    raise LLMUnavailableError(f"LLM unavailable: {last_exc}") from last_exc  # type: ignore[misc]
+
+
 def _parse_yaml_response(text: str) -> dict[str, Any]:
     """Extract and parse YAML from an LLM response, trying multiple strategies."""
     # Strategy 1: fenced ```yaml ... ``` block

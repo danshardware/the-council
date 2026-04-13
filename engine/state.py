@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-_SKIP_KEYS = {"logger", "tool_context"}
+_SKIP_KEYS = {"logger", "tool_context", "_conv"}
 _CHECKPOINT_SUBDIR = "_checkpoints"
 _WORKSPACE_CONTENT_LIMIT = 8192   # bytes — include full text below this size
 _WORKSPACE_PREVIEW_CHARS = 500    # chars shown for files above the limit
