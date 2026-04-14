@@ -1,0 +1,35 @@
+# Council Discord Configuration
+#
+# IMPORTANT: Never put the bot token here.
+# Add DISCORD_BOT_TOKEN=your-token to your .env file at the project root.
+#
+# Bot permissions required in the Discord Developer Portal:
+#   - Read Messages / View Channels
+#   - Send Messages
+#   - Create Public Threads
+#   - Manage Messages (for clearing reactions)
+#   - Add Reactions
+#   - Read Message History
+#
+# Privileged Gateway Intents (must be enabled in Developer Portal → Bot → Privileged Intents):
+#   - Message Content Intent
+
+# IANA timezone name for business-hours retry window (human-input retries)
+timezone: America/New_York
+
+guilds:
+  - guild_id: "1468353592510513346"
+    name: "DMA Enterprises"
+    # Channel → agent mappings.
+    # Right-click a channel → Copy Channel ID (enable Developer Mode first:
+    #   User Settings → Advanced → Developer Mode).
+    channels:
+      - channel_id: "1493272859764592741"
+        name: "ceo-chat"
+        agent: ceo
+      - channel_id: "1493273018573783040"
+        name: "research"
+        agent: researcher
+    # If true, messages in unmapped channels are sent to Nova Lite to pick
+    # the best agent. If false, a clarification message is posted instead.
+    routing_fallback_llm: true

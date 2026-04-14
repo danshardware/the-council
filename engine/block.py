@@ -6,10 +6,14 @@ import sys
 import os
 from typing import Any
 
+import logging
+
 import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
+
+_log = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pocketflow import Node
@@ -489,6 +493,54 @@ class HumanInputBlock(BaseBlock):
         return dict(shared)
 
     def exec(self, prep_res: dict) -> str:
+        if prep_res.get("channel_context"):
+            adapter = prep_res.get("_channel_adapter")
+            discord_loop = prep_res.get("_discord_loop")
+            ctx: dict = prep_res["channel_context"]
+
+            if adapter and discord_loop:
+                import asyncio
+                prompt_text = self.config.get(
+                    "prompt",
+                    "I need your confirmation to continue. Please reply in this thread.",
+                )
+                agent_cfg = prep_res.get("agent_config", {})
+
+                async def _ask_in_thread() -> None:
+                    thread_id = ctx.get("thread_id")
+                    if thread_id:
+                        channel = adapter._client.get_channel(int(thread_id))
+                        if channel:
+                            await adapter.send_embed(
+                                channel, "Awaiting your input", prompt_text, agent_cfg
+                            )
+
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        _ask_in_thread(), discord_loop
+                    ).result(timeout=10)
+                except Exception as exc:
+                    _log.warning("HumanInputBlock discord post failed: %s", exc)
+
+                # Save checkpoint so the gateway can resume when the human replies
+                from engine.state import save_checkpoint, checkpoint_path_for
+                cp_path = checkpoint_path_for(
+                    prep_res.get("logs_dir", "logs"),
+                    prep_res["agent_id"],
+                    prep_res["session_id"],
+                )
+                save_checkpoint(prep_res, cp_path)
+                ctx["pending_checkpoint"] = str(cp_path)
+                ctx["retry_count"] = 0
+                raise SuspendExecution(str(cp_path))
+
+            # Fallback: adapter unavailable — auto-approve to avoid hanging
+            _log.warning(
+                "HumanInputBlock: channel_context present but no adapter/loop — "
+                "auto-approving."
+            )
+            return "approved"
+
         prompt = self.config.get("prompt", "Agent requires input [y/n]: ")
         _console.print(f"\n🧑  [bold magenta]Human Input Required:[/bold magenta] {prompt}", end="")
         response = input().strip().lower()
@@ -518,6 +570,40 @@ class HumanReplyBlock(BaseBlock):
             message = action_input.get("message", "")
         else:
             message = str(action_input)
+
+        # When running from a channel context, post the agent's message to the
+        # Discord thread then suspend — the human's thread reply resumes the session.
+        if prep_res.get("channel_context"):
+            adapter = prep_res.get("_channel_adapter")
+            discord_loop = prep_res.get("_discord_loop")
+            ctx: dict = prep_res["channel_context"]
+            if adapter and discord_loop and message:
+                import asyncio
+                agent_cfg = prep_res.get("agent_config", {})
+                async def _post_to_thread() -> None:
+                    thread_id = ctx.get("thread_id")
+                    if thread_id:
+                        channel = adapter._client.get_channel(int(thread_id))
+                        if channel:
+                            await adapter.send_embed(channel, "Message", message, agent_cfg)
+                try:
+                    asyncio.run_coroutine_threadsafe(_post_to_thread(), discord_loop).result(timeout=10)
+                    ctx["_already_sent"] = True
+                except Exception as exc:
+                    _log.warning("Discord post failed inside HumanReplyBlock: %s", exc)
+
+            # Suspend and wait for the human's reply in the thread
+            from engine.state import save_checkpoint, checkpoint_path_for
+            cp_path = checkpoint_path_for(
+                prep_res.get("logs_dir", "logs"),
+                prep_res["agent_id"],
+                prep_res["session_id"],
+            )
+            save_checkpoint(prep_res, cp_path)
+            ctx["pending_checkpoint"] = str(cp_path)
+            ctx["retry_count"] = 0
+            raise SuspendExecution(str(cp_path))
+
         if message:
             _console.print(f"\n🤖 [bold cyan]Agent:[/bold cyan] {message}")
         _console.print("🧑  [bold magenta]You:[/bold magenta] ", end="")

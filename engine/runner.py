@@ -42,14 +42,18 @@ class AgentRunner:
         prior_messages: list | None = None,
         resume_from_block: str | None = None,
         resume_todo_list: list | None = None,
+        shared_overrides: dict | None = None,
     ) -> dict:
         """
         Run the agent with the given prompt.
 
         Args:
-            prompt:     Initial user message.
-            flow_name:  Key from agent YAML `flows:` section (default "main").
-            session_id: Optional; auto-generated if not provided.
+            prompt:          Initial user message.
+            flow_name:       Key from agent YAML `flows:` section (default "main").
+            session_id:      Optional; auto-generated if not provided.
+            shared_overrides: Optional dict merged into shared state after it is
+                              built.  Used by channel gateways to inject
+                              ``channel_context`` and ``_channel_adapter``.
 
         Returns:
             The final shared state dict.
@@ -133,6 +137,10 @@ class AgentRunner:
             ),
         }
 
+        # Merge any overrides from the calling context (e.g. channel gateway)
+        if shared_overrides:
+            shared.update(shared_overrides)
+
         _console.print(Rule(f"[bold green]Council — {self.agent_id} — {session_id}[/bold green]"))
         _console.print(f"[dim]Flow: {flow_file_key}  |  Max iterations: {max_iterations}[/dim]\n")
 
@@ -204,17 +212,25 @@ class AgentRunner:
 
         return shared
 
-    def resume(self, session_id: str) -> dict:
+    def resume(
+        self,
+        session_id: str,
+        shared_overrides: dict | None = None,
+        extra_messages: list | None = None,
+    ) -> dict:
         """Resume a crashed or incomplete session.
 
         Recovery order:
         1. Latest timestamped checkpoint from <workspace>/_checkpoints/ (richest state)
-        2. `messages` snapshot from the last session_end in the JSONL log (fallback)
+        2. ``messages`` snapshot from the last session_end in the JSONL log (fallback)
 
         In both cases the workspace file listing is injected as a [SYSTEM] message
         so the agent knows exactly what it already produced and can continue without
-        re-doing completed work.  The iteration counter always resets to 0 — the
-        agent gets a fresh budget.
+        re-doing completed work.  The iteration counter always resets to 0.
+
+        ``extra_messages`` are appended *after* all checkpoint/listing injection,
+        letting callers inject a human reply or system notice without duplicating
+        the resume logic.
         """
         log_path = self.logs_dir / self.agent_id / f"{session_id}.jsonl"
         if not log_path.exists():
@@ -287,6 +303,11 @@ class AgentRunner:
                     ),
                 })
 
+        # --- 4. Append caller-supplied extra messages (e.g. human reply, timeout notice) ---
+        if extra_messages:
+            prior_messages = list(prior_messages)  # ensure mutable
+            prior_messages.extend(extra_messages)
+
         _console.print(
             f"[bold yellow]Resuming session[/bold yellow] [dim]{session_id}[/dim]  "
             f"[dim](source: {checkpoint_source} | {len(prior_messages)} messages"
@@ -301,6 +322,7 @@ class AgentRunner:
             prior_messages=prior_messages,
             resume_from_block=resume_from_block,
             resume_todo_list=resume_todo_list,
+            shared_overrides=shared_overrides,
         )
 
     def _load_agent(self) -> dict:

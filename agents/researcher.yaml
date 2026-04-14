@@ -24,6 +24,12 @@ memory:
     - institutional
     - knowledge_base
 
+discord:
+  enabled: true
+  embed_name: "Researcher"
+  embed_color: 0x2e7d32
+  emoji: "🔬"
+
 context_files:
   - glob: "shared_knowledge/company/**/*.md"
     tag: "company_info"
