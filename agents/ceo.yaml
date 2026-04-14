@@ -29,6 +29,12 @@ memory:
     - knowledge_base
     - sop
 
+discord:
+  enabled: true
+  embed_name: "Ralph (CEO)"
+  embed_color: 0x1a237e
+  emoji: "🎩"
+
 context_files:
   - glob: "shared_knowledge/company/**/*.md"
     tag: "company_info"
