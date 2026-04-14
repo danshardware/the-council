@@ -1,1 +1,33 @@
-schedules: []
+schedules:
+  # Campaign Monitor: runs daily at 8 AM to gather community intelligence
+  - id: campaign_daily
+    agent_id: campaign
+    prompt: |
+      Run the daily community monitoring routine:
+      1. Pull GA4 traffic data for the last 7 days.
+      2. Check hot posts and search for relevant discussions in r/microgrowery, r/SpaceBuckets, r/hydro.
+      3. Identify engagement opportunities and content signals.
+      4. Compile and send the morning digest.
+    flow: main
+    trigger: cron
+    trigger_args:
+      hour: 8
+      minute: 0
+
+  # Marketing Agent: runs every Monday at 9 AM to plan and produce the week's content
+  - id: marketing_weekly
+    agent_id: marketing
+    prompt: |
+      Run the weekly content production routine:
+      1. Review the latest campaign intelligence digest.
+      2. Plan this week's blog post and YouTube outline.
+      3. Draft and submit the WordPress post as a draft.
+      4. Write the YouTube video outline.
+      5. Send the weekly summary to the CEO.
+    flow: main
+    trigger: cron
+    trigger_args:
+      day_of_week: mon
+      hour: 9
+      minute: 0
+

@@ -1,0 +1,244 @@
+id: campaign_loop
+max_iterations: 40
+start: plan
+
+on_error:
+  max_iterations:
+    start: compile_digest
+  llm_offline:
+    start: compile_digest
+  unhandled:
+    start: compile_digest
+
+blocks:
+
+  # ── Phase 1: Plan today's monitoring run ────────────────────────────────────
+
+  plan:
+    type: llm
+    system_prompt: |
+      You are the Campaign Monitor. Refer to the <brand> context for company and product details.
+
+      Work through the following checklist IN ORDER, one tool call per response. Check the
+      conversation history to see what has already been done and skip completed steps.
+
+      CHECKLIST:
+      {{{config.marketing.monitoring_checklist}}}
+
+      RULES:
+      - Call exactly ONE tool per response.
+      - If a tool returns an error (e.g. API credentials not set), mark that step as skipped
+        and move to the next item — do NOT retry the same tool.
+      - Once ALL steps are either completed or skipped, respond with action: compile_digest.
+      - Do NOT respond with action: default — always either call a tool or go to compile_digest.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "which step you are on and what you are doing"
+      action: get_traffic_report   # or next tool, or compile_digest when done
+      action_input:
+        days: 7
+      ```
+    tools:
+      - get_traffic_report
+      - get_top_pages
+      - get_top_referrers
+      - get_hot_posts
+      - search_reddit
+      - get_post_comments
+      - write_file
+    transitions:
+      get_traffic_report: traffic_block
+      get_top_pages: top_pages_block
+      get_top_referrers: referrers_block
+      get_hot_posts: hot_posts_block
+      search_reddit: search_block
+      get_post_comments: comments_block
+      write_file: write_block
+      compile_digest: compile_digest
+      done: send_digest
+      default: plan
+
+  traffic_block:
+    type: tool_call
+    tool: get_traffic_report
+    transitions:
+      default: plan
+
+  top_pages_block:
+    type: tool_call
+    tool: get_top_pages
+    transitions:
+      default: plan
+
+  referrers_block:
+    type: tool_call
+    tool: get_top_referrers
+    transitions:
+      default: plan
+
+  hot_posts_block:
+    type: tool_call
+    tool: get_hot_posts
+    transitions:
+      default: plan
+
+  search_block:
+    type: tool_call
+    tool: search_reddit
+    transitions:
+      default: plan
+
+  comments_block:
+    type: tool_call
+    tool: get_post_comments
+    transitions:
+      default: plan
+
+  write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: plan
+
+  # ── Phase 2: Compile the digest ─────────────────────────────────────────────
+
+  compile_digest:
+    type: llm
+    system_prompt: |
+      You have completed today's community monitoring run. Now compile the morning digest.
+      Refer to the <brand> context for company and product details.
+
+      Write a structured digest to workspace/campaign/{{{state.session_id}}}/digest_latest.md with these sections:
+
+      ## Analytics Highlights (last 7 days)
+      - Top 3 pages by traffic and key takeaways
+      - Top referral sources
+
+      ## Trending Discussions
+      For each subreddit monitored, list 3-5 posts with:
+      - Post title and Reddit URL
+      - Why it's relevant to the company's products
+      - Score and comment count
+
+      ## Engagement Opportunities
+      List 3-5 specific threads where the owner could add genuine value by sharing expertise or
+      linking to relevant content. For each:
+      - Thread title + URL
+      - Suggested response angle (what the company knows about this)
+      - Priority: high / medium
+
+      ## Content Signals
+      Based on what you saw today, list 2-3 content ideas (blog posts or YouTube topics)
+      that would directly address common questions in these communities.
+
+      Keep the digest scannable — bullet points and headers, no long prose.
+      {{{config.marketing.owner_name}}} reads this in 5 minutes over coffee.
+
+      After writing the file, transition to action: done.
+
+      Do not make anything up, only include insights directly supported by the data you gathered.
+      If there were errors getting that information, note that in the digest (e.g. "GA4 data unavailable, check credentials").
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "digest plan"
+      action: write_file
+      action_input:
+        path: "workspace/campaign/{{{state.session_id}}}/digest_latest.md"
+        content: "# Morning Digest — <today's date>\n\n..."
+      ```
+    tools:
+      - write_file
+    transitions:
+      write_file: write_digest_block
+      done: send_digest
+      default: compile_digest
+
+  write_digest_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: send_digest
+
+  # ── Phase 3: Send digest to marketing and CEO ────────────────────────────────
+
+  send_digest:
+    type: llm
+    system_prompt: |
+      The digest has been written. Now send it to the marketing agent, the CEO, and Discord.
+
+      Work through these steps IN ORDER, one tool call per response.
+      Check the conversation history to see which steps are already done.
+
+      Step 1: read_file — path: workspace/campaign/{{{state.session_id}}}/digest_latest.md
+      Step 2: send_message — target_agent: marketing — full digest content as prompt
+      Step 3: send_message — target_agent: ceo — short summary (3-4 bullets) + file path
+      Step 4: post_to_discord_channel — channel_id: {{{config.marketing.discord_digest_channel_id}}} — full digest content
+              Skip this step (go straight to Step 5) if channel_id is empty.
+      Step 5: When all prior steps are done, respond with action: done
+
+      RULES:
+      - Call exactly ONE tool per response.
+      - Never emit action: default — always either call a tool or emit action: done.
+      - Do not write prose confirmations. Respond only with valid YAML.
+
+      To read:
+      ```yaml
+      reasoning: "reading digest to send"
+      action: read_file
+      action_input:
+        path: "workspace/campaign/{{{state.session_id}}}/digest_latest.md"
+      ```
+
+      To send to marketing:
+      ```yaml
+      reasoning: "sending to marketing"
+      action: send_message
+      action_input:
+        target_agent: "marketing"
+        prompt: "<full digest content here>"
+      ```
+
+      To post to Discord:
+      ```yaml
+      reasoning: "posting digest to Discord channel"
+      action: post_to_discord_channel
+      action_input:
+        channel_id: "{{{config.marketing.discord_digest_channel_id}}}"
+        content: "<full digest content here>"
+      ```
+
+      To finish:
+      ```yaml
+      reasoning: "all messages sent, done"
+      action: done
+      ```
+    tools:
+      - read_file
+      - send_message
+      - post_to_discord_channel
+    transitions:
+      read_file: read_digest_block
+      send_message: send_message_block
+      post_to_discord_channel: post_discord_block
+      done: END
+      default: END
+
+  read_digest_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: send_digest
+
+  send_message_block:
+    type: tool_call
+    tool: send_message
+    transitions:
+      default: send_digest
+
+  post_discord_block:
+    type: tool_call
+    tool: post_to_discord_channel
+    transitions:
+      default: send_digest

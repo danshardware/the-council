@@ -1,0 +1,44 @@
+id: campaign
+name: Campaign Monitor
+description: |
+  Read included context and monitor the web for trends, discussions, 
+  and engagement opportunities relevant to the company's products and services. 
+  Compile findings into a daily digest for the Marketing agent.
+
+  Shadow mode: this agent gathers intelligence and drafts — it never posts or sends external
+  communications. All outputs are files in workspace/campaign/ or mailbox messages to other agents.
+
+flows:
+  main: campaign_loop
+  inbox: campaign_loop
+
+max_iterations: 30
+
+model_defaults:
+  provider: bedrock
+  model_id: amazon.nova-pro-v1:0
+  # model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+permissions:
+  workspace_paths:
+    - workspace/campaign/
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional
+    - knowledge_base
+
+discord:
+  enabled: true
+  embed_name: "Campaign Monitor"
+  embed_color: 0x00897b
+  emoji: "📡"
+
+context_files:
+  - glob: "shared_knowledge/company/**/*.md"
+    tag: "company_info"
+  - glob: "shared_knowledge/marketing/brand.md"
+    tag: "brand"
+  - glob: "shared_knowledge/marketing/campaigns/*.md"
+    tag: "campaign_info"

@@ -1,0 +1,394 @@
+id: marketing_loop
+max_iterations: 40
+start: triage
+
+on_error:
+  max_iterations:
+    start: weekly_report
+  llm_offline:
+    start: weekly_report
+  unhandled:
+    start: weekly_report
+
+blocks:
+  # ── Phase 0: Triage ───────────────────────────────────────────────────────────────────────
+
+  triage:
+    type: llm
+    system_prompt: |
+      You are the Marketing agent. Before starting content production, triage any incoming
+      intelligence from the Campaign Monitor.
+
+      Work through these steps IN ORDER:
+
+      Step 1: check_inbox — see if there are new campaign digest messages waiting.
+      Step 2: If a digest is in the inbox, read_file the digest path from the message.
+              If inbox is empty, go straight to Step 4.
+      Step 3: store_memory — save key insights from the digest so they persist across sessions.
+              Use realm=institutional, topic=<describe what you're storing>.
+              Repeat for each meaningful signal (top page trends, community themes, content ideas).
+              Mark the inbox message as processed once done.
+      Step 4: Decide and act on each item in the digest:
+
+              AUTONOMOUS (handle yourself this session — proceed to review_intelligence):
+              - Blog/YouTube topics clearly supported by community data
+              - Content ideas that match existing brand expertise (see <brand>)
+
+              DELEGATE (spawn the researcher agent for deep-dive work):
+              - Technical questions that need research you can't answer from context
+              - Competitor analysis or niche topics outside the company's core expertise
+
+              ESCALATE (post to Discord for the owner to review):
+              - Urgent community issues (product complaints, misinformation spreading)
+              - Engagement opportunities that require the owner's personal voice or decision
+              - Anything time-sensitive that can't wait for the weekly report
+
+      For escalations, use post_to_discord_channel with channel_id:
+      {{{config.marketing.discord_digest_channel_id}}}
+
+      RULES:
+      - Call exactly ONE tool per response.
+      - Never emit action: default.
+      - After all triage steps are complete, respond with action: review_intelligence.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what step you are on"
+      action: check_inbox
+      ```
+    tools:
+      - check_inbox
+      - read_file
+      - store_memory
+      - search_memory
+      - mark_message_processed
+      - post_to_discord_channel
+      - send_message
+      - spawn_agent
+    transitions:
+      check_inbox: triage_inbox_block
+      read_file: triage_read_block
+      store_memory: triage_memory_block
+      search_memory: triage_search_block
+      mark_message_processed: triage_mark_block
+      post_to_discord_channel: triage_discord_block
+      send_message: triage_send_block
+      spawn_agent: triage_spawn_block
+      review_intelligence: review_intelligence
+      default: END
+
+  triage_inbox_block:
+    type: tool_call
+    tool: check_inbox
+    transitions:
+      default: triage
+
+  triage_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: triage
+
+  triage_memory_block:
+    type: tool_call
+    tool: store_memory
+    transitions:
+      default: triage
+
+  triage_search_block:
+    type: tool_call
+    tool: search_memory
+    transitions:
+      default: triage
+
+  triage_mark_block:
+    type: tool_call
+    tool: mark_message_processed
+    transitions:
+      default: triage
+
+  triage_discord_block:
+    type: tool_call
+    tool: post_to_discord_channel
+    transitions:
+      default: triage
+
+  triage_send_block:
+    type: tool_call
+    tool: send_message
+    transitions:
+      default: triage
+
+  triage_spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: triage
+  # ── Phase 1: Review intelligence from Campaign Monitor ──────────────────────
+
+  review_intelligence:
+    type: llm
+    system_prompt: |
+      You are the Marketing agent. Refer to the <brand> context for company, product, brand
+      voice, and audience details.
+
+      Your mission this week:
+      1. Review the latest community intelligence digest from the Campaign Monitor.
+      2. Check existing WordPress drafts so you don't duplicate content.
+      3. Decide on 1 blog post and 1 YouTube video outline to create this week.
+      4. Draft both pieces of content.
+      5. Send a weekly summary to the CEO.
+
+      Start by reading the latest campaign digest and checking existing drafts.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you are reading first"
+      action: read_file
+      action_input:
+        path: "workspace/campaign/digest_latest.md"
+      ```
+    tools:
+      - read_file
+      - list_files
+      - list_wordpress_drafts
+      - search_memory
+      - spawn_agent
+    transitions:
+      read_file: read_block
+      list_files: list_block
+      list_wordpress_drafts: list_wp_drafts_block
+      search_memory: memory_block
+      spawn_agent: spawn_block
+      plan_content: plan_content
+      default: review_intelligence
+
+  read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: review_intelligence
+
+  list_block:
+    type: tool_call
+    tool: list_files
+    transitions:
+      default: review_intelligence
+
+  list_wp_drafts_block:
+    type: tool_call
+    tool: list_wordpress_drafts
+    transitions:
+      default: review_intelligence
+
+  memory_block:
+    type: tool_call
+    tool: search_memory
+    transitions:
+      default: review_intelligence
+
+  spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: review_intelligence
+
+  # ── Phase 2: Plan this week's content ───────────────────────────────────────
+
+  plan_content:
+    type: llm
+    system_prompt: |
+      You have reviewed this week's intelligence. Now plan the content you will create.
+      Refer to the <brand> context for product details, example angles, and brand voice.
+
+      Based on the community signals and GA4 data you have seen, decide:
+
+      1. **Blog post topic**: Choose a question or topic that appeared frequently in the
+         community research and where the company has genuine expertise.
+         The post should be practical and teach something — not a sales pitch.
+
+      2. **YouTube outline topic**: Choose something visual and hands-on. The outline should
+         include: hook (first 30s), sections with key points, suggested B-roll, and a CTA.
+
+      Save your content plan to workspace/marketing/weekly_plan.md, then start drafting.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "why these specific topics based on what you saw"
+      action: write_file
+      action_input:
+        path: "workspace/marketing/weekly_plan.md"
+        content: "# Content Plan — Week of <date>\n\n## Blog Post\n...\n\n## YouTube Outline\n..."
+      ```
+    tools:
+      - write_file
+    transitions:
+      write_file: write_plan_block
+      draft_blog: draft_blog
+      default: plan_content
+
+  write_plan_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: draft_blog
+
+  # ── Phase 3: Write the blog post draft ──────────────────────────────────────
+
+  draft_blog:
+    type: llm
+    system_prompt: |
+      You have a content plan. Now write the full WordPress blog post draft.
+      Refer to the <brand> context for brand voice, audience, and product details.
+
+      Requirements:
+      - Length: 600-1000 words
+      - Format: HTML (WordPress accepts this directly)
+      - Structure: intro paragraph → 3-5 sections with <h2> headings → conclusion with soft CTA
+      - Tone: follow the brand voice in <brand>
+      - Include practical details: specs, wiring notes, firmware commands where relevant
+      - CTA: invite readers to sign up for updates or check out {{{config.marketing.site_url}}}
+      - Do NOT mention pricing or make purchase promises — this is educational content
+
+      Tags to use: pick 4-6 from: {{{config.marketing.blog_tags}}}
+
+      After writing, save as a WordPress draft using create_wordpress_draft.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "blog post structure plan"
+      action: create_wordpress_draft
+      action_input:
+        title: "Your Post Title Here"
+        content: "<h2>Section 1</h2>\n<p>Content...</p>\n..."
+        excerpt: "One-sentence summary for post listings."
+        tags: "tag1,tag2,tag3,tag4"
+      ```
+    tools:
+      - create_wordpress_draft
+      - write_file
+    transitions:
+      create_wordpress_draft: create_draft_block
+      write_file: write_block
+      draft_youtube: draft_youtube
+      default: draft_blog
+
+  create_draft_block:
+    type: tool_call
+    tool: create_wordpress_draft
+    transitions:
+      default: content_guardrail
+
+  write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: draft_blog
+
+  content_guardrail:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: "{{{config.guardrails.content_safety}}}"
+    transitions:
+      approved: draft_youtube
+      needs_confirmation: draft_youtube   # shadow mode — always continue, just flag
+      rejected: draft_blog               # regenerate if genuinely problematic
+
+  # ── Phase 4: Write the YouTube video outline ────────────────────────────────
+
+  draft_youtube:
+    type: llm
+    system_prompt: |
+      Write a YouTube video outline for the content creator to record.
+      Refer to the <brand> context for presenter style notes, CTA preferences, and products.
+
+      The outline should include:
+
+      **Hook (0:00–0:30)**
+      — The specific problem or question the video answers
+      — Why it matters to the viewer
+
+      **Sections** (aim for 3-5, each 2-3 minutes)
+      — Section title
+      — Key points to cover (bullet list)
+      — Any demo, B-roll, or on-screen graphic to include
+
+      **Conclusion (final 60s)**
+      — Summary of key takeaways
+      — CTA: subscribe / visit {{{config.marketing.site_url}}} / comment with their setup
+
+      **Thumbnail concept**
+      — One-sentence description of what the thumbnail should show
+
+      **Suggested title options** (3 variants — A/B test candidates)
+
+      Save to workspace/marketing/youtube_outline_latest.md, then move to weekly_report.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "video concept rationale"
+      action: write_file
+      action_input:
+        path: "workspace/marketing/youtube_outline_latest.md"
+        content: "# YouTube Outline — <title>\n\n..."
+      ```
+    tools:
+      - write_file
+    transitions:
+      write_file: write_youtube_block
+      weekly_report: weekly_report
+      default: draft_youtube
+
+  write_youtube_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: weekly_report
+
+  # ── Phase 5: Send weekly summary to CEO ─────────────────────────────────────
+
+  weekly_report:
+    type: llm
+    system_prompt: |
+      You have completed this week's content production. Compile a concise weekly summary
+      and send it to the CEO via mailbox.
+
+      The message should include:
+      - What community trends you observed this week
+      - What blog post draft was created (title + WordPress edit URL if available)
+      - What YouTube outline is ready (title + path to file)
+      - Top 3 engagement opportunities from this week's community monitoring
+      - Any notable GA4 trends worth flagging
+
+      Keep it to one short page — {{{config.marketing.owner_name}}} reads this on their phone.
+
+      Then send it and finish.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "summary content"
+      action: send_message
+      action_input:
+        target_agent: "ceo"
+        prompt: "# Weekly Marketing Summary\n\n..."
+      ```
+    tools:
+      - read_file
+      - send_message
+    transitions:
+      read_file: read_report_block
+      send_message: send_report_block
+      done: END
+      default: weekly_report
+
+  read_report_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: weekly_report
+
+  send_report_block:
+    type: tool_call
+    tool: send_message
+    transitions:
+      default: END

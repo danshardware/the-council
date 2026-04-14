@@ -30,6 +30,9 @@ guilds:
       - channel_id: "1493273018573783040"
         name: "research"
         agent: researcher
+      - channel_id: "1493660429925220484"
+        name: "marketing"
+        agent: marketing
     # If true, messages in unmapped channels are sent to Nova Lite to pick
     # the best agent. If false, a clarification message is posted instead.
     routing_fallback_llm: true

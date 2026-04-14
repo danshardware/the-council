@@ -8,8 +8,8 @@ Each one of them should be discussed for an implementation plan before writing
     - Make a test that lists a bunch of thing unrelated to our business that absolutely should never be allowed (firearms, gambling, porn, etc.) and make sure they get flagged
     - make a guardrail called hater that just outright rejects everything to test flows
     - ensure human override works
-- Allow communication through other channels to the system through various channels (discord and a texting service)
 - Allow writes to agent's long-term file repo as well as its workspace directory
+- Per turn prompt injection and ensure it doesn't get re-inserted if it does not change. Compaction should clear this cache.
 
 ## Blocks
 
@@ -21,7 +21,6 @@ Each one of them should be discussed for an implementation plan before writing
 
 - Allow defining flows in other files that can be referenced. These would differ from an agent in that they only define logic, but inherit everything else. An example would be something like the Ralph WIggum loop (Make a list and read through the list taking 1 task at a time)
 - Local model execution in flows
-- Test in dameon mode
 - Containerize
 - Parallel execution of tools and sub agents
 - Figure out how to have tool calls that don't require LLMs, like a code block

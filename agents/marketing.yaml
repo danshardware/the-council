@@ -1,0 +1,46 @@
+id: marketing
+name: Marketing
+description: |
+  Weekly content and marketing strategy agent. Runs every Monday to:
+  1. Review the latest campaign intelligence digests from the Campaign Monitor.
+  2. Delegate deep market research tasks to the Researcher agent where needed.
+  3. Draft blog posts covering topics with high community demand or traffic potential.
+  4. Produce YouTube video outlines and script drafts for the content creator to record.
+  5. Send a weekly content summary to the CEO for review.
+
+  Shadow mode: all content is created as drafts (WordPress drafts, files in workspace/marketing/).
+  Nothing is published externally without manual approval.
+
+flows:
+  main: marketing_loop
+  inbox: marketing_loop
+
+max_iterations: 30
+
+model_defaults:
+  provider: bedrock
+  model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+permissions:
+  workspace_paths:
+    - workspace/marketing/
+    - workspace/campaign/   # read-only access to campaign digests
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional
+    - knowledge_base
+    - sop
+
+discord:
+  enabled: true
+  embed_name: "Marketing"
+  embed_color: 0x6a1b9a
+  emoji: "📣"
+
+context_files:
+  - glob: "shared_knowledge/company/**/*.md"
+    tag: "company_info"
+  - glob: "shared_knowledge/marketing/brand.md"
+    tag: "brand"
