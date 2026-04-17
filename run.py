@@ -21,10 +21,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dotenv import load_dotenv
 load_dotenv()
 
+from engine import paths
 from engine.runner import AgentRunner
 
 
 def main() -> None:
+    paths.init_data_dirs()
+
     parser = argparse.ArgumentParser(
         prog="council",
         description="Run a Council agent or start the scheduler daemon.",
@@ -64,13 +67,7 @@ def main() -> None:
         help="Resume a crashed session by SESSION_ID (reads state from its log file)",
     )
     parser.add_argument(
-        "--agents-dir", default="agents", help="Directory containing agent YAML files"
-    )
-    parser.add_argument(
-        "--flows-dir", default="flows", help="Directory containing flow YAML files"
-    )
-    parser.add_argument(
-        "--logs-dir", default="logs", help="Directory for trace logs"
+        "--logs-dir", default=str(paths.LOGS_DIR), help="Directory for trace logs"
     )
 
     args = parser.parse_args()
@@ -97,8 +94,6 @@ def main() -> None:
 
     runner = AgentRunner(
         agent_id=args.agent,
-        agents_dir=args.agents_dir,
-        flows_dir=args.flows_dir,
         logs_dir=args.logs_dir,
     )
 
@@ -127,7 +122,7 @@ def _start_channel_gateways() -> None:
 
 
 def _start_discord_gateway(
-    config_path: str = "config/discord.yaml",
+    config_path: str | None = None,
 ) -> threading.Thread | None:
     from rich.console import Console
     _con = Console()
@@ -136,9 +131,10 @@ def _start_discord_gateway(
     if not token:
         return None
 
-    if not Path(config_path).exists():
+    resolved = Path(config_path) if config_path else paths.resolve("config", "discord.yaml")
+    if not resolved.exists():
         _con.print(
-            "[yellow][Discord] DISCORD_BOT_TOKEN found but config/discord.yaml is missing "
+            "[yellow][Discord] DISCORD_BOT_TOKEN found but discord.yaml is missing "
             "— skipping Discord gateway.[/yellow]"
         )
         return None
@@ -146,7 +142,7 @@ def _start_discord_gateway(
     try:
         from engine.discord_router import load_discord_config
         from engine.discord_gateway import build_discord_client
-        config = load_discord_config(config_path)
+        config = load_discord_config(str(resolved))
         client = build_discord_client(config)
     except Exception as exc:
         _con.print(f"[red][Discord] Failed to initialise gateway: {exc}[/red]")

@@ -26,9 +26,13 @@ _config: dict | None = None
 
 
 def _get_config() -> dict:
+    """Load browser guardrails config, preferring a DATA_DIR override."""
+    from engine.paths import resolve as _resolve
     global _config
     if _config is None:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
+        override_path = _resolve("config", "browser_guardrails.yaml")
+        load_path = override_path if override_path.exists() else _CONFIG_PATH
+        with open(load_path, encoding="utf-8") as f:
             _config = yaml.safe_load(f)
     return _config
 

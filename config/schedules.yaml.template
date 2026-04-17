@@ -1,3 +1,19 @@
+# Council Schedule Definitions — TEMPLATE
+#
+# HOW TO USE:
+#   1. Copy this file to data/config/schedules.yaml (the mounted data volume).
+#   2. Edit agent_id, prompt, trigger, and trigger_args to suit your deployment.
+#   3. The scheduler reads data/config/schedules.yaml at startup.
+#      Any changes made via the schedule_tools API are written there at runtime.
+#
+# TRIGGER TYPES:
+#   cron      — recurring on a schedule (uses APScheduler CronTrigger args:
+#               year/month/day/week/day_of_week/hour/minute/second)
+#   interval  — recurring every N seconds/minutes/hours/days/weeks
+#   date      — one-shot at a specific datetime (run_date: "YYYY-MM-DD HH:MM:SS")
+#
+# Leave this file unchanged — it is committed to the repo as a reference.
+
 schedules:
   # Campaign Monitor: runs daily at 8 AM to gather community intelligence
   - id: campaign_daily

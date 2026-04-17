@@ -49,9 +49,11 @@ class MemoryStore:
         realm, topic, keywords (comma-separated), agent_id, session_id, timestamp
     """
 
-    def __init__(self, db_path: str = "memory_db") -> None:
+    def __init__(self, db_path: str | None = None) -> None:
+        from engine.paths import MEMORY_DB_DIR
+        resolved_path = Path(db_path) if db_path is not None else MEMORY_DB_DIR
         self._ef = BedrockEmbeddingFunction()
-        self._client = chromadb.PersistentClient(path=str(Path(db_path).resolve()))
+        self._client = chromadb.PersistentClient(path=str(resolved_path.resolve()))
         self._collections: dict[str, chromadb.Collection] = {
             realm: self._client.get_or_create_collection(
                 name=realm,

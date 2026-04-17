@@ -13,7 +13,9 @@ wheels/
 .env
 .env.*
 
-# Files in use when running or testing
+# All mutable state lives under data/ (mounted volume in production)
+# Old locations kept here during transition period
+data/
 logs/
 workspace/
 memory_db/

@@ -146,7 +146,7 @@ blocks:
       reasoning: "what you are reading first"
       action: read_file
       action_input:
-        path: "workspace/campaign/digest_latest.md"
+        path: "data/workspace/campaign/digest_latest.md"
       ```
     tools:
       - read_file
@@ -210,14 +210,14 @@ blocks:
       2. **YouTube outline topic**: Choose something visual and hands-on. The outline should
          include: hook (first 30s), sections with key points, suggested B-roll, and a CTA.
 
-      Save your content plan to workspace/marketing/weekly_plan.md, then start drafting.
+      Save your content plan to data/workspace/marketing/weekly_plan.md, then start drafting.
 
       Respond ONLY with valid YAML:
       ```yaml
       reasoning: "why these specific topics based on what you saw"
       action: write_file
       action_input:
-        path: "workspace/marketing/weekly_plan.md"
+        path: "data/workspace/marketing/weekly_plan.md"
         content: "# Content Plan — Week of <date>\n\n## Blog Post\n...\n\n## YouTube Outline\n..."
       ```
     tools:
@@ -322,14 +322,14 @@ blocks:
 
       **Suggested title options** (3 variants — A/B test candidates)
 
-      Save to workspace/marketing/youtube_outline_latest.md, then move to weekly_report.
+      Save to data/workspace/marketing/youtube_outline_latest.md, then move to weekly_report.
 
       Respond ONLY with valid YAML:
       ```yaml
       reasoning: "video concept rationale"
       action: write_file
       action_input:
-        path: "workspace/marketing/youtube_outline_latest.md"
+        path: "data/workspace/marketing/youtube_outline_latest.md"
         content: "# YouTube Outline — <title>\n\n..."
       ```
     tools:

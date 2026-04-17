@@ -15,5 +15,5 @@ model_defaults:
 
 permissions:
   workspace_paths:
-    - workspace/web_search/
+    - data/workspace/web_search/
   allowed_commands: []
