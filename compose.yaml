@@ -1,0 +1,13 @@
+services:
+  council:
+    build: .
+    image: council:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Mutable state: logs, memory, messages, workspace, shared_knowledge,
+      # and operator-supplied agent/flow/config overrides.
+      - ./data:/app/data
+    # Remove the command override to run the default daemon.
+    # Override here to run a one-shot agent instead:
+    #   command: ["--agent", "ceo", "--prompt", "Hello"]

@@ -1,0 +1,23 @@
+# --- Python ---
+__pycache__/
+*.py[oc]
+*.pyo
+
+# --- Virtual environment ---
+.venv/
+
+# --- Environment / secrets ---
+.env
+.env.*
+
+# --- Mutable runtime data (bind-mounted at runtime, not baked into the image) ---
+data/
+
+# --- Development artefacts ---
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# --- Git ---
+.git/
