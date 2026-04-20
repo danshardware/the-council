@@ -1,0 +1,7 @@
+services:
+  council:
+    image: council:latest    # pre-built from the repo; rebuild with: podman build -t council:latest /path/to/repo
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data     # bind-mount this instance's data dir

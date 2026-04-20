@@ -109,7 +109,7 @@ blocks:
       You have completed today's community monitoring run. Now compile the morning digest.
       Refer to the <brand> context for company and product details.
 
-      Write a structured digest to workspace/campaign/{{{state.session_id}}}/digest_latest.md with these sections:
+      Write a structured digest to data/workspace/campaign/{{{state.session_id}}}/digest_latest.md with these sections:
 
       ## Analytics Highlights (last 7 days)
       - Top 3 pages by traffic and key takeaways
@@ -145,7 +145,7 @@ blocks:
       reasoning: "digest plan"
       action: write_file
       action_input:
-        path: "workspace/campaign/{{{state.session_id}}}/digest_latest.md"
+        path: "data/workspace/campaign/{{{state.session_id}}}/digest_latest.md"
         content: "# Morning Digest — <today's date>\n\n..."
       ```
     tools:
@@ -171,7 +171,7 @@ blocks:
       Work through these steps IN ORDER, one tool call per response.
       Check the conversation history to see which steps are already done.
 
-      Step 1: read_file — path: workspace/campaign/{{{state.session_id}}}/digest_latest.md
+      Step 1: read_file — path: data/workspace/campaign/{{{state.session_id}}}/digest_latest.md
       Step 2: send_message — target_agent: marketing — full digest content as prompt
       Step 3: send_message — target_agent: ceo — short summary (3-4 bullets) + file path
       Step 4: post_to_discord_channel — channel_id: {{{config.marketing.discord_digest_channel_id}}} — full digest content
@@ -188,7 +188,7 @@ blocks:
       reasoning: "reading digest to send"
       action: read_file
       action_input:
-        path: "workspace/campaign/{{{state.session_id}}}/digest_latest.md"
+        path: "data/workspace/campaign/{{{state.session_id}}}/digest_latest.md"
       ```
 
       To send to marketing:

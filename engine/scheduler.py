@@ -20,10 +20,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.date import DateTrigger
 from rich.console import Console
 
+from engine.paths import MESSAGES_DIR, SCHEDULES_PATH
+
 _console = Console()
 _log = logging.getLogger(__name__)
-
-SCHEDULES_PATH = Path("config") / "schedules.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ def _poll_mailboxes() -> None:
     from engine.mailbox import Mailbox
     from engine.runner import AgentRunner
     mailbox = Mailbox()
-    messages_dir = Path("messages")
+    messages_dir = MESSAGES_DIR
     if not messages_dir.exists():
         return
     for agent_dir in messages_dir.iterdir():

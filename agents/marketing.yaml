@@ -23,8 +23,8 @@ model_defaults:
 
 permissions:
   workspace_paths:
-    - workspace/marketing/
-    - workspace/campaign/   # read-only access to campaign digests
+    - data/workspace/marketing/
+    - data/workspace/campaign/   # read-only access to campaign digests
   allowed_commands: []
 
 memory:
@@ -40,7 +40,7 @@ discord:
   emoji: "📣"
 
 context_files:
-  - glob: "shared_knowledge/company/**/*.md"
+  - glob: "data/shared_knowledge/company/**/*.md"
     tag: "company_info"
-  - glob: "shared_knowledge/marketing/brand.md"
+  - glob: "data/shared_knowledge/marketing/brand.md"
     tag: "brand"

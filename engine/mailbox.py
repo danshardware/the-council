@@ -10,8 +10,9 @@ from typing import Any
 
 
 class Mailbox:
-    def __init__(self, messages_dir: str = "messages") -> None:
-        self.messages_dir = Path(messages_dir)
+    def __init__(self, messages_dir: str | None = None) -> None:
+        from engine.paths import MESSAGES_DIR
+        self.messages_dir = Path(messages_dir) if messages_dir is not None else MESSAGES_DIR
 
     def send(
         self,

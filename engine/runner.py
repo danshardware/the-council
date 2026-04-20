@@ -16,6 +16,7 @@ from engine.block import MaxIterationsError, SuspendExecution
 from engine.llm import LLMUnavailableError
 from engine.flow_loader import load_flow
 from engine.logger import Logger
+from engine import paths
 from tools import ToolContext
 
 _console = Console()
@@ -25,14 +26,10 @@ class AgentRunner:
     def __init__(
         self,
         agent_id: str,
-        agents_dir: str = "agents",
-        flows_dir: str = "flows",
-        logs_dir: str = "logs",
+        logs_dir: str | None = None,
     ) -> None:
         self.agent_id = agent_id
-        self.agents_dir = Path(agents_dir)
-        self.flows_dir = Path(flows_dir)
-        self.logs_dir = Path(logs_dir)
+        self.logs_dir = Path(logs_dir) if logs_dir is not None else paths.LOGS_DIR
 
     def run(
         self,
@@ -69,7 +66,7 @@ class AgentRunner:
             raise ValueError(
                 f"Agent '{self.agent_id}' has no flow named '{flow_name}'"
             )
-        flow_path = self.flows_dir / f"{flow_file_key}.yaml"
+        flow_path = paths.resolve("flows", f"{flow_file_key}.yaml")
 
         # Load flow
         flow, flow_config, block_instances = load_flow(flow_path)
@@ -162,6 +159,7 @@ class AgentRunner:
                 _console.print(
                     f"\n[bold red]Max iterations reached:[/bold red] {exc}"
                 )
+                shared["_run_error"] = True
                 _dispatch_on_error("max_iterations", exc, flow, flow_config, block_instances, shared)
             except LLMUnavailableError as exc:
                 tb = traceback.format_exc()
@@ -169,6 +167,7 @@ class AgentRunner:
                     shared, "llm_offline", error=str(exc), traceback=tb
                 )
                 _console.print(f"\n[bold red]LLM unavailable:[/bold red] {exc}")
+                shared["_run_error"] = True
                 _dispatch_on_error("llm_offline", exc, flow, flow_config, block_instances, shared)
             except SuspendExecution as exc:
                 shared["logger"].log_event(
@@ -187,6 +186,7 @@ class AgentRunner:
                 )
                 _console.print(f"\n[bold red]Unhandled error:[/bold red] {exc}")
                 _console.print(f"[dim]{tb}[/dim]")
+                shared["_run_error"] = True
                 _dispatch_on_error("unhandled", exc, flow, flow_config, block_instances, shared)
             except BaseException as exc:
                 # Catches KeyboardInterrupt, SystemExit etc. — log then re-raise
@@ -326,7 +326,8 @@ class AgentRunner:
         )
 
     def _load_agent(self) -> dict:
-        path = self.agents_dir / f"{self.agent_id}.yaml"
+        """Load agent YAML, preferring a DATA_DIR override over the built-in."""
+        path = paths.resolve("agents", f"{self.agent_id}.yaml")
         if not path.exists():
             raise FileNotFoundError(f"Agent definition not found: {path}")
         with path.open(encoding="utf-8") as fh:

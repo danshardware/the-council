@@ -29,6 +29,12 @@ Each one of them should be discussed for an implementation plan before writing
 ## Additional tools
 
 - Python: Execute python for doing math and analysys. Should run sandboxed, be limited in total size of code to run, and have a guardrail to prevent it from doing things that aren't appropriate to the task ( mostly concerned that they use this  to get around various other guardrails)
+- Other integrations:
+    - Hacker News — fully open API, technically savvy audience
+    - Mastodon — open API, no approval
+    - Bluesky — open AT Protocol, no gating
+    - LinkedIn (with their API) — better for B2B brand monitoring
+    - Google Alerts — free, no API needed, captures Reddit mentions too
 
 ## Utilites
 
@@ -160,3 +166,10 @@ FUTURE EXTENSION
 - Tiered compaction: older segments get progressively more compressed.
 - Cache checkpoint placed immediately after compact (KV cache reuse).
 =============================================================
+
+## Research
+
+- [Natural-Language Agent Harnesses](https://arxiv.org/html/2603.25723v1)
+- [How claude remembers your project](https://code.claude.com/docs/en/memory)
+- [AgentSpec](https://github.com/haoyuwang99/AgentSpec/tree/master/src/rules/apollo) Agentic Guardrails
+- [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)

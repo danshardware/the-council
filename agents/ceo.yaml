@@ -20,7 +20,7 @@ model_defaults:
 
 permissions:
   workspace_paths:
-    - workspace/ceo/
+    - data/workspace/ceo/
   allowed_commands: []
 
 memory:
@@ -36,7 +36,7 @@ discord:
   emoji: "🎩"
 
 context_files:
-  - glob: "shared_knowledge/company/**/*.md"
+  - glob: "data/shared_knowledge/company/**/*.md"
     tag: "company_info"
-  - glob: "shared_knowledge/financial/**/*.md"
+  - glob: "data/shared_knowledge/financial/**/*.md"
     tag: "financial_context"

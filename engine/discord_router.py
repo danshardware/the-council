@@ -37,11 +37,12 @@ class RouterResult:
     method: Literal["map", "llm", "unclear"]
 
 
-def load_discord_config(path: str = "config/discord.yaml") -> dict:
-    p = Path(path)
+def load_discord_config(path: str | None = None) -> dict:
+    from engine.paths import resolve
+    p = Path(path) if path else resolve("config", "discord.yaml")
     if not p.exists():
         raise FileNotFoundError(
-            f"Discord config not found: {path}\n"
+            f"Discord config not found: {p}\n"
             "Create config/discord.yaml — see "
             "Planning/Phase_2_Important/14_Discord_Channel for the schema."
         )

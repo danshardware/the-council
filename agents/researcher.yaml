@@ -16,7 +16,7 @@ model_defaults:
 
 permissions:
   workspace_paths:
-    - workspace/researcher/
+    - data/workspace/researcher/
   allowed_commands: []
 
 memory:
@@ -31,5 +31,5 @@ discord:
   emoji: "🔬"
 
 context_files:
-  - glob: "shared_knowledge/company/**/*.md"
+  - glob: "data/shared_knowledge/company/**/*.md"
     tag: "company_info"
