@@ -26,13 +26,30 @@ _FORBIDDEN_STATE_KEYS: frozenset[str] = frozenset({
 
 @functools.lru_cache(maxsize=1)
 def _load_config_dir() -> dict[str, Any]:
-    """Load all YAMLs from the config/ directory, keyed by file stem. Cached on first call."""
-    config_dir = Path(__file__).parent.parent / "config"
+    """Load all YAMLs from the config/ directory, keyed by file stem.
+
+    Respects the DATA_DIR override layer: a file at DATA_DIR/config/<stem>.yaml
+    shadows the built-in copy at REPO_ROOT/config/<stem>.yaml.
+    Cached on first call (config is not expected to change within a session).
+    """
+    from engine.paths import DATA_DIR, REPO_ROOT
+
+    builtin_dir = REPO_ROOT / "config"
+    override_dir = DATA_DIR / "config"
+
+    stems: set[str] = set()
+    if builtin_dir.is_dir():
+        stems.update(p.stem for p in builtin_dir.glob("*.yaml"))
+    if override_dir.is_dir():
+        stems.update(p.stem for p in override_dir.glob("*.yaml"))
+
     result: dict[str, Any] = {}
-    if config_dir.is_dir():
-        for path in config_dir.glob("*.yaml"):
-            with path.open(encoding="utf-8") as fh:
-                result[path.stem] = yaml.safe_load(fh) or {}
+    for stem in stems:
+        override_path = override_dir / f"{stem}.yaml"
+        builtin_path = builtin_dir / f"{stem}.yaml"
+        path = override_path if override_path.exists() else builtin_path
+        with path.open(encoding="utf-8") as fh:
+            result[stem] = yaml.safe_load(fh) or {}
     return result
 
 

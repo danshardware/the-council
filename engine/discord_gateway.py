@@ -240,7 +240,10 @@ async def _handle_channel_message(
         return  # leave agent emoji reaction to signal "waiting"
 
     await adapter.remove_own_reaction(message, agent_emoji)
-    await adapter.add_reaction(message, "✅")
+    if shared.get("_run_error"):
+        await adapter.add_reaction(message, "❌")
+    else:
+        await adapter.add_reaction(message, "✅")
 
 
 def _extract_final_response(shared: dict) -> str:

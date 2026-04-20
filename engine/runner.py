@@ -159,6 +159,7 @@ class AgentRunner:
                 _console.print(
                     f"\n[bold red]Max iterations reached:[/bold red] {exc}"
                 )
+                shared["_run_error"] = True
                 _dispatch_on_error("max_iterations", exc, flow, flow_config, block_instances, shared)
             except LLMUnavailableError as exc:
                 tb = traceback.format_exc()
@@ -166,6 +167,7 @@ class AgentRunner:
                     shared, "llm_offline", error=str(exc), traceback=tb
                 )
                 _console.print(f"\n[bold red]LLM unavailable:[/bold red] {exc}")
+                shared["_run_error"] = True
                 _dispatch_on_error("llm_offline", exc, flow, flow_config, block_instances, shared)
             except SuspendExecution as exc:
                 shared["logger"].log_event(
@@ -184,6 +186,7 @@ class AgentRunner:
                 )
                 _console.print(f"\n[bold red]Unhandled error:[/bold red] {exc}")
                 _console.print(f"[dim]{tb}[/dim]")
+                shared["_run_error"] = True
                 _dispatch_on_error("unhandled", exc, flow, flow_config, block_instances, shared)
             except BaseException as exc:
                 # Catches KeyboardInterrupt, SystemExit etc. — log then re-raise
