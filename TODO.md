@@ -166,3 +166,10 @@ FUTURE EXTENSION
 - Tiered compaction: older segments get progressively more compressed.
 - Cache checkpoint placed immediately after compact (KV cache reuse).
 =============================================================
+
+## Research
+
+- [Natural-Language Agent Harnesses](https://arxiv.org/html/2603.25723v1)
+- [How claude remembers your project](https://code.claude.com/docs/en/memory)
+- [AgentSpec](https://github.com/haoyuwang99/AgentSpec/tree/master/src/rules/apollo) Agentic Guardrails
+- [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
