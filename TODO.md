@@ -29,6 +29,12 @@ Each one of them should be discussed for an implementation plan before writing
 ## Additional tools
 
 - Python: Execute python for doing math and analysys. Should run sandboxed, be limited in total size of code to run, and have a guardrail to prevent it from doing things that aren't appropriate to the task ( mostly concerned that they use this  to get around various other guardrails)
+- Other integrations:
+    - Hacker News — fully open API, technically savvy audience
+    - Mastodon — open API, no approval
+    - Bluesky — open AT Protocol, no gating
+    - LinkedIn (with their API) — better for B2B brand monitoring
+    - Google Alerts — free, no API needed, captures Reddit mentions too
 
 ## Utilites
 
