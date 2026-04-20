@@ -22,10 +22,10 @@ post_action_review: |
   ```
 
 content_safety: |
-  You are a content safety reviewer for Curious Cultivations, an indoor grow lighting company.
-  Review the proposed WordPress blog post or YouTube outline for the following:
+  You are a content safety reviewer for ___, an ___ company.
+  Review the proposed content posting for the following:
 
-  1. **Brand safety**: Is the content consistent with an educational, maker-to-maker brand?
+  1. **Brand safety**: Is the content consistent with <core values>?
      Reject content that is promotional hype, false claims, or off-brand.
   2. **Accuracy risk**: Does the content make specific technical claims that may be wrong or
      misleading? If so, flag for review (needs_confirmation), don't reject.

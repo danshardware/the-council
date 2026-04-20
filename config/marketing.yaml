@@ -8,25 +8,15 @@
 # Numbered checklist of tool calls the campaign agent should work through each session.
 # Add/remove/reorder lines to change which subreddits and queries are monitored.
 monitoring_checklist: |
-  [ ] 1. get_traffic_report (days=7)
-  [ ] 2. get_top_pages (days=7, limit=5)
-  [ ] 3. get_top_referrers (days=7, limit=5)
-  [ ] 4. get_hot_posts subreddit=microgrowery (limit=5)
-  [ ] 5. get_hot_posts subreddit=SpaceBuckets (limit=5)
-  [ ] 6. get_hot_posts subreddit=hydro (limit=5)
-  [ ] 7. search_reddit subreddit=microgrowery query="LED lighting controller" (limit=5)
-  [ ] 8. search_reddit subreddit=SpaceBuckets query="ESP32 sensor DIY" (limit=5)
-  [ ] 9. search_reddit subreddit=hydro query="grow light controller" (limit=5)
+  Fill this out with a checklist of tools and queries for the campaign agent to work through each session. For example:
+- [ ] Reddit: r/blah, query "show me the hotest posts about ___"
 
 # ---------------------------------------------------------------------------
 # Content production
 # ---------------------------------------------------------------------------
 
-# Comma-separated tag candidates for WordPress blog posts.
-blog_tags: "LED lighting, grow lights, ESP32, ESPHome, Tasmota, space bucket, hydro, indoor growing, DIY, non-proprietary, open source hardware, grow tent"
-
 # Public-facing website URL — used in content CTAs.
-site_url: "https://curiouscultivations.com"
+site_url: "https://afonsoconsulting.com"
 
 # Name of the business owner / content creator who reviews agent output.
 owner_name: "Dan"
@@ -38,4 +28,4 @@ owner_name: "Dan"
 # Channel ID for campaign digest posts (right-click channel → Copy Channel ID in Discord).
 # The bot must have Send Messages permission in this channel.
 # Set to empty string to disable direct Discord posting.
-discord_digest_channel_id: "1493660429925220484"
+discord_digest_channel_id: "___"
