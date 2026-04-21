@@ -1,0 +1,46 @@
+id: email
+name: Email Agent
+description: |
+  Processes incoming Outlook emails delivered to this agent's mailbox.
+  Classifies each email, routes relevant ones to other agents, notifies
+  the user via configured channels, and queues Outlook actions (move,
+  flag, draft replies) for the Windows-side executor script.
+
+flows:
+  main: email_loop
+  inbox: email_loop
+
+max_iterations: 15
+
+model_defaults:
+  provider: bedrock
+  model_id: amazon.nova-pro-v1:0
+
+permissions:
+  workspace_paths:
+    - data/workspace/outlook/
+  allowed_paths:
+    - data/workspace/outlook/
+    - agents/
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional
+
+discord:
+  enabled: true
+  embed_name: "Email Agent"
+  embed_color: 0x1565c0
+  emoji: "📧"
+
+# Channels to notify after processing. Add entries for each desired destination.
+# provider: "discord"  — uses DISCORD_BOT_TOKEN from the environment
+# destination: Discord channel ID (string)
+notify_channels:
+  - provider: discord
+    destination: "REPLACE_WITH_CHANNEL_ID"
+
+context_files:
+  - glob: "data/shared_knowledge/company/**/*.md"
+    tag: "company_info"
