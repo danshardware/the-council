@@ -13,8 +13,12 @@ param(
 
 function Strip-Html($html) {
     if (-not $html) { return "" }
+    # Remove entire <style>, <head>, and <script> blocks (content + tags)
+    $text = $html -replace '(?is)<style[^>]*>.*?</style>', ''
+    $text = $text  -replace '(?is)<head[^>]*>.*?</head>',  ''
+    $text = $text  -replace '(?is)<script[^>]*>.*?</script>', ''
     # Block-level tags → newline so paragraph breaks are preserved
-    $text = $html -replace '(?i)<(br\s*/?>|/p>|/div>|/tr>|/li>|/h[1-6]>)', "`n"
+    $text = $text -replace '(?i)<(br\s*/?>|/p>|/div>|/tr>|/li>|/h[1-6]>)', "`n"
     # Remove all remaining tags
     $text = $text -replace '<[^>]+>', ' '
     # Decode common HTML entities
@@ -37,6 +41,7 @@ function Truncate-Body($text, [int]$max = 1000) {
 }
 
 
+function Parse-Since($since) {
     if ($since -match '^(\d+)([hd])$') {
         $value = [int]$matches[1]
         $unit  = $matches[2]
