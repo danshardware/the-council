@@ -29,7 +29,11 @@ model_defaults:
 
 permissions:
   workspace_paths:
-    - workspace/analyst/             # agent can only read/write here via file tools
+    - workspace/analyst/             # session-scoped scratch space: <path>/<session_id>/ is auto-created
+  write_paths:
+    - data/outputs/analyst/          # stable writable directories (NOT session-scoped)
+  read_paths:
+    - shared_knowledge/              # read-only source directories (NOT session-scoped)
   allowed_commands: []               # executables run_command may use; empty = no commands
 
 memory:
@@ -46,7 +50,9 @@ context_files:                       # files injected into every LLM system prom
 - `id` — must be unique, matches filename stem, used as `--agent` CLI arg and for mailbox routing
 - `flows` — at minimum provide `main`; add `inbox` if the agent should react to mailbox messages
 - `max_iterations` — combined with the flow's own cap; the lower wins
-- `permissions.workspace_paths` — file tools enforce these; agent cannot escape them
+- `permissions.workspace_paths` — session-scoped scratch dirs; `<path>/<session_id>/` is created at startup so concurrent runs never collide. File tools enforce these.
+- `permissions.write_paths` — stable writable dirs with no session suffix. Use for output files that should persist across sessions (e.g. `data/agents/`, `data/flows/`). The directory is pre-created at startup.
+- `permissions.read_paths` — read-only source dirs with no session suffix (e.g. `agents/`, `config/`). File tools will allow reads but reject writes.
 - `permissions.allowed_commands` — `run_command` blocks any executable not in this list
 - `memory.realms` — not currently enforced at query time but documents intent
 - `context_files` — each entry glob-expands at session start; files are read, wrapped in XML tags, prepended to every `llm` block's system prompt in that session
@@ -161,6 +167,9 @@ Calls one registered tool. Reads the last `action_input` dict from `shared` (set
 ```yaml
 type: tool_call
 tool: write_file       # must match a @tool function name
+input_keys: [path]     # optional: whitelist of action_input keys to forward to the tool
+                       # useful when chaining — e.g. pass only `path` to validate_yaml
+                       # after a write_file call that also had a `content` key
 transitions:
   default: next_block
 ```
@@ -270,6 +279,25 @@ system_prompt: |
 Full Mustache is supported — sections (`{{#key}}…{{/key}}`), inverted sections, lambdas, partials etc.
 
 **Protected state keys** are never exposed to templates: `logger`, `tool_context`, `agent_config`, and any `_`-prefixed key.
+
+**Built-in path lists** are always available as template variables — no extra configuration needed:
+
+| Variable | Content |
+|---|---|
+| `{{#state.write_paths}}{{.}}{{/state.write_paths}}` | Stable writable dirs declared in `permissions.write_paths` |
+| `{{#state.read_paths}}{{.}}{{/state.read_paths}}` | Read-only source dirs declared in `permissions.read_paths` |
+
+Use these in system prompts to surface the correct paths to the LLM without hardcoding them. Example:
+
+```yaml
+system_prompt: |
+  Writable output directories:
+  {{#state.write_paths}}- {{.}}
+  {{/state.write_paths}}
+  Read-only source directories:
+  {{#state.read_paths}}- {{.}}
+  {{/state.read_paths}}
+```
 
 If a referenced variable is missing an error is raised and propagated to the runner's standard error handler. Prompts with no `{{` tokens are passed through unchanged (zero overhead).
 

@@ -1,0 +1,318 @@
+id: ops_loop
+max_iterations: 40
+start: plan
+
+on_error:
+  max_iterations:
+    start: recovery_report
+  llm_offline:
+    start: recovery_report
+  unhandled:
+    start: recovery_report
+
+blocks:
+
+  # ── Phase 1: Understand the task and gather information ─────────────────────
+
+  plan:
+    type: llm
+    system_prompt: |
+      You are an Ops agent — a configuration specialist for The Council system.
+      You read, search, and modify YAML configuration files across the system.
+
+      ## Directory layout
+
+      READ-ONLY source directories (never write here):
+      {{#state.read_paths}}- {{.}}
+      {{/state.read_paths}}
+      WRITABLE output directories (only write here):
+      {{#state.write_paths}}- {{.}}
+      {{/state.write_paths}}
+
+      ## Core rules
+
+      Follow these core rules without exception:
+
+      1. ONLY write to writable directories listed above — never modify source files.
+      2. After every write, immediately commit: `git -C data/ add -A && git -C data/ commit -m "ops: <description>"`
+      3. Apply changes and report what was done — do not ask for confirmation unless
+         the user explicitly requested a preview first.
+      4. Use replace_in_file for targeted edits. Use write_file only for new files or
+         full rewrites.
+      5. Prefer grep_files to find relevant files before reading them in full.
+
+      ## Workflow
+      In this phase you may ONLY read and inspect. You do NOT write files here.
+      - To search file contents, use grep_files.
+      - To list files, use list_files.
+      - To read a file, use read_file.
+      - To run a read-only shell command (ls, find, grep, git log, etc.), use run_command.
+        run_command in this phase is for INSPECTION ONLY — do NOT use it to write files.
+        Never use shell redirects (> or >>), echo, cat with redirection, or tee to create files.
+      - Once you have enough information to make ALL changes, respond with action: apply.
+        The apply phase has write_file and replace_in_file available.
+      - If the task is purely informational (no changes needed), respond with action: report.
+      - If the user asked for a preview or confirmation before changes are made,
+        respond with action: ask_human to present your proposed changes and wait.
+
+      ## When your plan is rejected by the safety guardrail
+      If you see "[SYSTEM] Your proposed action 'apply' was rejected by the safety guardrail",
+      do NOT ask the human — revise your reasoning and try action: apply again with
+      a corrected approach. Only ask the human if you genuinely cannot proceed without
+      more information from them.
+
+      ## Responding
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you understand and what you plan to do next"
+      action: grep_files | list_files | read_file | run_command | ask_human | apply | report
+      action_input:
+        # fields depend on action — match the tool's parameter names
+        # for grep_files: pattern, path, glob
+        # for list_files: path
+        # for read_file: path
+        # for run_command: command
+        # for ask_human: message (shown to the user; describe the proposed changes)
+        # for apply / report: (no action_input needed)
+      ```
+    tools:
+      - grep_files
+      - list_files
+      - read_file
+      - run_command
+      - search_memory
+    transitions:
+      grep_files: grep_block
+      list_files: list_block
+      read_file: read_block
+      run_command: check_command
+      search_memory: memory_block
+      ask_human: ask_human_block
+      apply: check_plan
+      report: report
+      default: plan
+
+  grep_block:
+    type: tool_call
+    tool: grep_files
+    transitions:
+      default: plan
+
+  list_block:
+    type: tool_call
+    tool: list_files
+    transitions:
+      default: plan
+
+  read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: plan
+
+  check_command:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: "{{{config.guardrails.ops_command_check}}}"
+    transitions:
+      approved: run_block
+      rejected: plan
+      default: plan
+
+  run_block:
+    type: tool_call
+    tool: run_command
+    transitions:
+      default: plan
+
+  memory_block:
+    type: tool_call
+    tool: search_memory
+    transitions:
+      default: plan
+  # ── Guardrail: review plan before applying changes ───────────────────────────
+
+  check_plan:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: "{{{config.guardrails.ops_plan_check}}}"
+    transitions:
+      approved: apply
+      rejected: plan
+      default: plan
+  # ── Phase 2: Apply changes ───────────────────────────────────────────────────
+
+  apply:
+    type: llm
+    system_prompt: |
+      You are an Ops agent applying configuration changes.
+
+      Apply all planned changes now:
+      - Use replace_in_file for targeted changes (preferred).
+      - Use write_file only when creating new files or doing a full rewrite.
+      - After ALL writes are done, run exactly one git commit:
+          run_command: git -C data/ add -A && git -C data/ commit -m "ops: <concise description of all changes>"
+      - Once committed, respond with action: report.
+
+      If you need to read a file before editing it, use read_file first.
+      Do NOT ask the human for clarification — all decisions should have been
+      made in the plan phase. If you are genuinely blocked, respond with action: report
+      and explain why.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you are about to change and why"
+      action: read_file | replace_in_file | write_file | run_command | report
+      action_input:
+        # fields depend on action — match the tool's parameter names exactly
+      ```
+    tools:
+      - read_file
+      - replace_in_file
+      - write_file
+      - validate_yaml
+      - run_command
+    transitions:
+      read_file: apply_read_block
+      replace_in_file: apply_replace_block
+      write_file: apply_write_block
+      run_command: apply_check_command
+      report: report
+      default: apply
+
+  apply_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: apply
+
+  apply_replace_block:
+    type: tool_call
+    tool: replace_in_file
+    transitions:
+      default: check_yaml_replace
+
+  check_yaml_replace:
+    type: tool_call
+    tool: validate_yaml
+    input_keys: [path]
+    transitions:
+      default: apply
+
+  apply_write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: check_yaml_write
+
+  check_yaml_write:
+    type: tool_call
+    tool: validate_yaml
+    input_keys: [path]
+    transitions:
+      default: apply
+
+  apply_run_block:
+    type: tool_call
+    tool: run_command
+    transitions:
+      default: apply
+
+  apply_check_command:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: "{{{config.guardrails.ops_command_check}}}"
+    transitions:
+      approved: apply_run_block
+      rejected: apply
+      default: apply
+
+  # ── Human confirmation (optional) ─────────────────────────────────────────────
+
+  ask_human_block:
+    type: human_reply
+    transitions:
+      replied: plan
+
+  # ── Phase 3: Report results ──────────────────────────────────────────────────
+
+  report:
+    type: llm
+    system_prompt: |
+      You are an Ops agent. The task is complete (or no changes were needed).
+
+      Do the following in order:
+      1. Call write_file to save the full detailed report to report.md in your workspace.
+         This is the canonical answer — include all relevant detail here.
+      2. Call append_to_file to add a one-line entry to ops_changes.md:
+           "<date>: <what changed or was inspected> [commit: <hash or n/a>]"
+      3. Call store_memory with:
+           content: a 2-4 sentence summary of what was changed or inspected and the outcome
+           topic: a short descriptive label (e.g. "created triage agent", "updated ceo flow")
+           realm: ops_log
+      4. Respond ONLY with:
+         ```yaml
+         reasoning: |
+           <paste the FULL report content here — this is returned to the caller>
+         action: done
+         ```
+
+      The reasoning field IS the answer returned to the user or CEO. Write the complete
+      answer there — not a summary of what you wrote to a file.
+    tools:
+      - write_file
+      - append_to_file
+      - store_memory
+      - run_command
+    transitions:
+      write_file: report_write_block
+      append_to_file: report_append_block
+      store_memory: report_store_memory_block
+      run_command: report_run_block
+      done: END
+      default: report
+
+  report_append_block:
+    type: tool_call
+    tool: append_to_file
+    transitions:
+      default: report
+
+  report_write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: report
+
+  report_run_block:
+    type: tool_call
+    tool: run_command
+    transitions:
+      default: report
+
+  report_store_memory_block:
+    type: tool_call
+    tool: store_memory
+    transitions:
+      default: report
+
+  # ── Error recovery ───────────────────────────────────────────────────────────
+
+  recovery_report:
+    type: llm
+    max_visits: 3
+    system_prompt: |
+      The Ops session ended early due to an error or iteration limit.
+
+      Summarise what was completed and what was not. If any files were written but
+      not committed, note that the user may need to run:
+        git -C data/ add -A && git -C data/ commit -m "ops: partial changes"
+
+      Respond ONLY with:
+      ```yaml
+      reasoning: "brief summary of partial work done"
+      action: done
+      ```
+    transitions:
+      done: END
+      default: END

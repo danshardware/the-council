@@ -1,6 +1,11 @@
 from __future__ import annotations
+import fnmatch
 import os
+import re
 from pathlib import Path
+
+import yaml as _yaml
+
 from tools import ToolContext, tool
 
 
@@ -191,3 +196,131 @@ def insert_at_line(path: str, line_number: int, text: str, context: ToolContext)
         return f"[ERROR] {str(e)}"
     except Exception as e:
         return f"[ERROR] Failed to insert in {path}: {str(e)}"
+
+
+# Maximum file size to search — prevents runaway reads on large binaries or logs.
+_GREP_MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MB
+
+
+@tool
+def grep_files(
+    pattern: str,
+    path: str,
+    glob: str,
+    context: ToolContext,
+) -> str:
+    """Search for a regex pattern across files matching a glob under path.
+
+    Walks the directory tree rooted at ``path``, filters files by ``glob``
+    (e.g. ``**/*.yaml``), and returns every line that matches ``pattern``.
+
+    Output format: one match per line — ``filepath:lineno: content``.
+    Returns ``(no matches)`` when nothing is found.
+
+    Files larger than 1 MB are skipped to avoid runaway reads.
+
+    Parameters:
+        pattern (str): Python regex pattern (re.search).
+        path (str): Root directory to search. Must be within allowed paths.
+        glob (str): Filename glob filter applied to each file's name (e.g.
+            ``*.yaml``, ``**/*.yaml``).  Only the *filename* component is
+            matched against the glob, so ``**/*.yaml`` and ``*.yaml`` behave
+            identically here.
+        context (ToolContext): Injected by the tool runner; carries allowed
+            paths and agent identity.
+
+    Returns:
+        str: Newline-separated match lines, or ``(no matches)``, or an error
+        string prefixed with ``[ERROR]``.
+    """
+    try:
+        resolved = _assert_path_allowed(path, context)
+    except PermissionError as e:
+        return f"[ERROR] {str(e)}"
+
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        return f"[ERROR] Invalid regex pattern: {e}"
+
+    # Derive a simple filename-only glob for fnmatch from the provided glob.
+    # Take the last path component so that both "*.yaml" and "**/*.yaml"
+    # correctly become "*.yaml" for per-filename matching.
+    filename_glob = Path(glob).name or "*"
+
+    matches: list[str] = []
+
+    for root, dirs, files in os.walk(resolved):
+        # Prune private directories (same convention as list_files).
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith("_") and not d.startswith(".")
+        ]
+        for filename in files:
+            if filename.startswith("_") or filename.startswith("."):
+                continue
+            if not fnmatch.fnmatch(filename, filename_glob):
+                continue
+
+            file_path = Path(root) / filename
+
+            if file_path.stat().st_size > _GREP_MAX_FILE_BYTES:
+                matches.append(
+                    f"[SKIPPED — file too large] {file_path}"
+                )
+                continue
+
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                try:
+                    text = file_path.read_text(encoding="latin-1")
+                except OSError:
+                    continue
+
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if compiled.search(line):
+                    matches.append(f"{file_path}:{lineno}: {line}")
+
+    return "\n".join(matches) if matches else "(no matches)"
+
+
+@tool
+def validate_yaml(path: str, context: ToolContext) -> str:
+    """Validate that a file contains well-formed YAML.
+
+    Reads the file at ``path`` and attempts to parse it with PyYAML.
+    Returns ``"valid"`` on success, or a human-readable error string
+    describing the parse failure (line number and message) so the agent
+    can correct the file before committing.
+
+    Parameters:
+        path (str): Path to the YAML file to validate. Must be within
+            allowed workspace paths.
+        context (ToolContext): Injected by the tool runner.
+
+    Returns:
+        str: ``"valid"`` if the file parses successfully, otherwise an
+        error description prefixed with ``[INVALID YAML]``.
+    """
+    try:
+        resolved = _assert_path_allowed(path, context)
+    except PermissionError as e:
+        return f"[ERROR] {str(e)}"
+
+    if not resolved.exists():
+        return f"[ERROR] File not found: {path}"
+
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = resolved.read_text(encoding="latin-1")
+    except OSError as e:
+        return f"[ERROR] Could not read {path}: {e}"
+
+    try:
+        _yaml.safe_load(text)
+        return "valid"
+    except _yaml.YAMLError as e:
+        return f"[INVALID YAML] {path}: {e}"
+

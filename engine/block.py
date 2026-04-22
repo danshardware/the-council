@@ -226,6 +226,7 @@ class LLMBlock(BaseBlock):
 
         shared["action"] = action
         shared["action_input"] = exec_res.get("action_input", {})
+        shared["reasoning"] = exec_res.get("reasoning", "")
 
         # Persist the live Conversation and its serialized turns (written to checkpoint)
         shared["_conv"] = conv
@@ -298,8 +299,10 @@ class GuardrailBlock(BaseBlock):
         import sys
         action = prep_res.get("action", "")
         action_input = prep_res.get("action_input", {})
+        reasoning = prep_res.get("reasoning", "") or ""
         user_msg = (
             f"Proposed action: {action}\n"
+            f"Agent reasoning: {reasoning[:600]}\n"
             f"Action input:\n{yaml.dump(action_input, default_flow_style=False)}"
         )
         system_prompt = render_prompt(self.config["system_prompt"], prep_res)
@@ -378,6 +381,10 @@ class ToolCallBlock(BaseBlock):
         if bt is None:
             raise ValueError(f"Tool '{tool_name}' not found in registry")
         action_input: dict = prep_res.get("action_input", {})
+        # Allow blocks to whitelist which keys to forward (e.g. validate after write)
+        input_keys = self.config.get("input_keys")
+        if input_keys:
+            action_input = {k: v for k, v in action_input.items() if k in input_keys}
         import time
         t0 = time.monotonic()
         try:

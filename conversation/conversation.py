@@ -371,7 +371,12 @@ class Conversation:
             ValueError: If the tool is not registered.
         """
         if tool_name not in self.tools:
-            raise ValueError(f"Tool '{tool_name}' is not registered.")
+            available = list(self.tools.keys()) if self.tools else []
+            raise ValueError(
+                f"Tool '{tool_name}' is not available in the current phase. "
+                f"Available tools: {available}. "
+                "If you need write_file or replace_in_file, respond with action: apply to enter the apply phase."
+            )
         return self.tools[tool_name](*args, **kwargs)
 
     _MAX_TOOL_CALLS_PER_TURN = 40

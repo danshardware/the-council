@@ -1,0 +1,65 @@
+id: ops
+name: Ops
+description: |
+  Configuration agent. Reads, searches, and modifies YAML configuration files
+  (agents, flows, config). Invoked by the CEO or directly to make
+  system changes on behalf of the user. Applies changes immediately, commits
+  them to git, and reports what was done including the commit hash.
+
+flows:
+  main: ops_loop
+  inbox: ops_loop
+
+max_iterations: 40
+
+model_defaults:
+  provider: bedrock
+  model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+permissions:
+  # workspace_paths are session-scoped (session_id appended) — ephemeral scratch space
+  workspace_paths:
+    - data/workspace/ops/
+  # write_paths are NOT session-scoped — stable writable directories for output files
+  write_paths:
+    - data/agents/
+    - data/flows/
+    - data/config/
+    - data/shared_knowledge/ops/
+  # read_paths are NOT session-scoped — read-only source directories
+  read_paths:
+    - agents/
+    - flows/
+    - config/
+    - docs/
+  allowed_commands:
+    - git
+    - grep
+    - find
+    - sed
+    - awk
+    - ls
+    - cat
+    - head
+    - tail
+    - wc
+    - ps
+    - top
+    - free
+    - df
+    - du
+
+memory:
+  realms:
+    - institutional
+    - ops_log
+
+discord:
+  enabled: true
+  embed_name: "Ops"
+  embed_color: 0x37474f
+  emoji: "⚙️"
+
+context_files:
+  - glob: "data/shared_knowledge/company/**/*.md"
+    tag: "company_info"

@@ -22,6 +22,24 @@ from tools import ToolContext
 _console = Console()
 
 
+def _resolve_path(p: str) -> str:
+    """Rewrite paths that start with 'data/' to be under DATA_DIR.
+
+    This allows agent YAMLs to declare paths like 'data/agents/' regardless
+    of whether COUNCIL_DATA_DIR points inside or outside the repo root.
+    Paths that don't start with 'data/' are returned unchanged (they are
+    repo-relative source directories such as 'agents/', 'flows/', 'config/').
+    """
+    if p.startswith("data/") or p == "data":
+        suffix = p[len("data/"):] if p.startswith("data/") else ""
+        resolved = str(paths.DATA_DIR / suffix) if suffix else str(paths.DATA_DIR)
+        # Preserve trailing slash convention used by the rest of the runner
+        if p.endswith("/") and not resolved.endswith("/"):
+            resolved += "/"
+        return resolved
+    return p
+
+
 class AgentRunner:
     def __init__(
         self,
@@ -92,11 +110,24 @@ class AgentRunner:
         # This prevents file clashes when the same agent runs concurrently.
         _base_paths = agent_config.get("permissions", {}).get("workspace_paths", [])
         session_workspace_paths = [
-            str(Path(p.rstrip("/")) / session_id) + "/"
+            str(Path(_resolve_path(p).rstrip("/")) / session_id) + "/"
             for p in _base_paths
         ]
         for _sp in session_workspace_paths:
             Path(_sp).mkdir(parents=True, exist_ok=True)
+
+        # read_paths are shared (not session-scoped) — used for read-only access
+        # to source directories such as agents/, flows/, config/.
+        _read_paths = [_resolve_path(p) for p in agent_config.get("permissions", {}).get("read_paths", [])]
+
+        # write_paths are shared (not session-scoped) — stable writable directories
+        # such as data/agents/, data/flows/. Pre-created so the agent can write
+        # immediately without needing to know the session id.
+        _write_paths = [_resolve_path(p) for p in agent_config.get("permissions", {}).get("write_paths", [])]
+        for _wp in _write_paths:
+            Path(_wp).mkdir(parents=True, exist_ok=True)
+
+        all_allowed_paths = session_workspace_paths + _read_paths + _write_paths
 
         # Build shared state
         # When resuming, seed the conversation with prior history so the agent
@@ -111,6 +142,8 @@ class AgentRunner:
             "session_id": session_id,
             "logs_dir": str(self.logs_dir),
             "agent_config": agent_config,
+            "write_paths": _write_paths,
+            "read_paths": _read_paths,
             "max_iterations": max_iterations,
             "iteration": 0,
             "block_visits": {},
@@ -126,7 +159,7 @@ class AgentRunner:
             "tool_context": ToolContext(
                 agent_id=self.agent_id,
                 session_id=session_id,
-                allowed_paths=session_workspace_paths,
+                allowed_paths=all_allowed_paths,
                 allowed_commands=agent_config.get("permissions", {}).get(
                     "allowed_commands", []
                 ),
@@ -256,7 +289,7 @@ class AgentRunner:
         # Derive session workspace path (same logic as run())
         agent_config = self._load_agent()
         _base_paths = agent_config.get("permissions", {}).get("workspace_paths", [])
-        session_workspace = Path(_base_paths[0].rstrip("/")) / session_id if _base_paths else None
+        session_workspace = Path(_resolve_path(_base_paths[0]).rstrip("/")) / session_id if _base_paths else None
 
         # --- 1. Try latest workspace checkpoint ---
         prior_messages: list | None = None

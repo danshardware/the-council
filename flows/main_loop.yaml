@@ -15,6 +15,14 @@ blocks:
 
       Review your current context and decide what to do next.
 
+      ## Sub-agents available for delegation
+      - **researcher** — general research, web search, fact-finding
+      - **ops** — system configuration specialist. Delegate to ops when the user asks
+        to inspect, search, or change agent/flow/config YAML files — e.g. "find all
+        places that mention channel X", "how is the researcher flow set up?", "change
+        the CEO model to X". Ops applies changes immediately and returns a summary
+        with the git commit hash.
+
       Respond ONLY with valid YAML:
       ```yaml
       reasoning: "your thinking"
