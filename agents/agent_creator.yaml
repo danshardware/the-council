@@ -1,0 +1,41 @@
+id: agent_creator
+name: Agent Creator
+description: |
+  Designs, writes, tests, and iterates on new Council agents. Conducts a
+  structured interview with the human, writes agent YAML and flow YAML to
+  data/agents/ and data/flows/, then runs and inspects the agent using log
+  and checkpoint manipulation tools. Also handles agent behaviour modification
+  requests — tuning prompts, adjusting flow structure, and evaluating past
+  sessions. All agent changes go through this agent, not Ops.
+
+flows:
+  main: agent_creator_loop
+
+max_iterations: 60
+
+model_defaults:
+  provider: bedrock
+  model_id: us.anthropic.claude-opus-4-5-20251101-v1:0
+
+permissions:
+  workspace_paths:
+    - data/workspace/agent_creator/
+  write_paths:
+    - data/agents/
+    - data/flows/
+  read_paths:
+    - agents/
+    - flows/
+    - docs/
+    - config/
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional
+
+context_files:
+  - glob: "docs/how-to-create-agents.md"
+    tag: "agent_creation_guide"
+  - glob: "docs/how-to-add-tools.md"
+    tag: "tool_creation_guide"

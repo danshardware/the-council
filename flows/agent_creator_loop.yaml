@@ -1,0 +1,338 @@
+id: agent_creator_loop
+max_iterations: 60
+start: gather
+
+on_error:
+  max_iterations:
+    start: report
+  unhandled:
+    start: report
+
+blocks:
+
+  # ── Phase 1: Gather requirements ────────────────────────────────────────────
+
+  gather:
+    type: llm
+    system_prompt: |
+      You are the Agent Creator for The Council, a multi-agent AI framework.
+      Your job is to help the human design, build, test, and iterate on a new
+      Council agent — or to modify an existing one.
+
+      You have the full agent creation guide and tool guide injected into your
+      context. Follow them precisely.
+
+      ## Phase 1 — Gather Requirements
+
+      If this is a NEW agent, interview the human to establish:
+      1. What does the agent do? What problem does it solve?
+      2. What tools does it need? (Check the tool guide for available tools.)
+      3. What does its flow look like? How many phases? What are the decisions?
+      4. What are sample inputs and expected outputs? How will we know it works?
+      5. Are there any existing agents it should delegate to or receive work from?
+
+      If this is a MODIFICATION to an existing agent, ask:
+      1. Which agent? What specific behaviour needs to change?
+      2. What is wrong with the current behaviour? (Share a session log if possible.)
+      3. What should the correct behaviour look like?
+
+      Do NOT proceed to Draft until the scope is unambiguous.
+      Use list_files or read_file to inspect existing agents/flows if helpful.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you understand so far and what you still need to know"
+      action: list_files | read_file | ask_human | draft
+      action_input:
+        # for list_files: path
+        # for read_file: path
+        # for ask_human: message (your question(s) for the human)
+        # for draft: (no action_input needed — proceed when scope is clear)
+      ```
+    tools:
+      - list_files
+      - read_file
+    transitions:
+      list_files: gather_list_block
+      read_file: gather_read_block
+      ask_human: gather_ask_human
+      draft: draft
+      default: gather
+
+  gather_list_block:
+    type: tool_call
+    tool: list_files
+    transitions:
+      default: gather
+
+  gather_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: gather
+
+  gather_ask_human:
+    type: human_input
+    prompt: "Agent Creator needs your input to proceed."
+    transitions:
+      approved: gather
+      rejected: gather
+      default: gather
+
+  # ── Phase 2: Draft agent and flow files ─────────────────────────────────────
+
+  draft:
+    type: llm
+    system_prompt: |
+      You are the Agent Creator. You have finished gathering requirements.
+      Now write the agent YAML and flow YAML files.
+
+      ## Phase 2 — Draft
+
+      Rules:
+      - Write the agent YAML to: data/agents/<id>.yaml
+      - Write the flow YAML to: data/flows/<id>_loop.yaml
+      - Follow the agent creation guide exactly (injected above).
+      - write_paths MUST only contain paths starting with data/.
+      - allowed_commands should be [] unless the agent has a specific need.
+      - Do NOT embed raw user input verbatim in system prompts.
+      - For modifications: use replace_in_file to make targeted changes.
+
+      After writing, respond with action: check_definition so the safety
+      guardrail can review your work before the test run.
+
+      If you need to read an existing file before modifying it, use read_file first.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you are writing and why"
+      action: read_file | write_file | replace_in_file | check_definition
+      action_input:
+        # for read_file: path
+        # for write_file: path, content
+        # for replace_in_file: path, old_string, new_string
+        # for check_definition: (no action_input — proceed when files are written)
+      ```
+    tools:
+      - read_file
+      - write_file
+      - replace_in_file
+    transitions:
+      read_file: draft_read_block
+      write_file: draft_write_block
+      replace_in_file: draft_replace_block
+      check_definition: check_definition
+      default: draft
+
+  draft_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: draft
+
+  draft_write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: draft
+
+  draft_replace_block:
+    type: tool_call
+    tool: replace_in_file
+    transitions:
+      default: draft
+
+  # ── Safety guardrail: review agent definition before running ────────────────
+
+  check_definition:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: "{{{config.guardrails.agent_definition_safety}}}"
+    transitions:
+      approved: test
+      needs_confirmation: confirm_definition
+      rejected: draft
+      default: draft
+
+  confirm_definition:
+    type: human_input
+    prompt: "The safety guardrail flagged a concern with the agent definition. Please review and decide whether to proceed."
+    transitions:
+      approved: test
+      rejected: draft
+      default: draft
+
+  # ── Phase 3: Test ───────────────────────────────────────────────────────────
+
+  test:
+    type: llm
+    system_prompt: |
+      You are the Agent Creator. The agent definition passed the safety review.
+      Now run a test to see if the agent loads, parses, and executes correctly.
+
+      ## Phase 3 — Test
+
+      Steps:
+      1. Use list_agent_sessions to see if there is an existing session for this agent.
+      2. Use agent_test(action="restart") to start a completely fresh test run
+         with a simple, representative prompt that exercises the main flow.
+      3. Use read_session_log to read the resulting trace.
+      4. Analyse the log:
+         - Did the flow parse and load without errors?
+         - Did block transitions work as expected?
+         - Did any block visit count exceed 5 (possible loop)?
+         - Were there tool errors or YAML parse failures?
+         - Did the flow reach END or a report block?
+
+      If issues are found, respond with action: review.
+      If the flow ran cleanly, respond with action: ask_human to show the
+      human a summary and ask if they are satisfied.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you observed and your assessment"
+      action: list_agent_sessions | agent_test | read_session_log | review | ask_human
+      action_input:
+        # for list_agent_sessions: agent_id
+        # for agent_test: agent_id, session_id, block_name, action ("restart" or "resume")
+        # for read_session_log: agent_id, session_id
+        # for review: (no action_input)
+        # for ask_human: message (summary of test results for the human)
+      ```
+    tools:
+      - list_agent_sessions
+      - agent_test
+      - read_session_log
+    transitions:
+      list_agent_sessions: test_list_sessions_block
+      agent_test: test_run_block
+      read_session_log: test_read_log_block
+      review: review
+      ask_human: test_ask_human
+      default: test
+
+  test_list_sessions_block:
+    type: tool_call
+    tool: list_agent_sessions
+    transitions:
+      default: test
+
+  test_run_block:
+    type: tool_call
+    tool: agent_test
+    transitions:
+      default: test
+
+  test_read_log_block:
+    type: tool_call
+    tool: read_session_log
+    transitions:
+      default: test
+
+  test_ask_human:
+    type: human_input
+    prompt: "Agent Creator has test results. Please review and confirm whether the agent is working as expected."
+    transitions:
+      approved: report
+      rejected: review
+      default: review
+
+  # ── Phase 4: Review and fix ─────────────────────────────────────────────────
+
+  review:
+    type: llm
+    system_prompt: |
+      You are the Agent Creator. The test revealed issues. Diagnose and fix them.
+
+      ## Phase 4 — Review
+
+      Available tools:
+      - read_session_log: re-read the trace in full.
+      - agent_test_modify(action="remove_last_run"): roll back one LLM turn
+        in the checkpoint history (use when the last turn produced bad output).
+      - agent_test_modify(action="remove_last_turn"): remove the last log line
+        (use for log cleanup).
+      - agent_test_modify(action="modify_checkpoint", patch_json=...): inject
+        corrected state into the checkpoint and resume from that point.
+      - agent_test(action="resume", block_name=X): rewind the session to the
+        last occurrence of block X and resume from there.
+
+      Workflow:
+      1. Read the log if you haven't already.
+      2. Identify the first block where things went wrong.
+      3. Decide: is this a flow/prompt issue (fix in draft) or a state issue
+         (patch the checkpoint and resume)?
+      4. For state patches: modify_checkpoint → resume. For structural issues:
+         go back to draft.
+
+      When you have a clear diagnosis and fix plan, respond with action: draft
+      (to rewrite) or action: resume (to retry with a patched checkpoint).
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "diagnosis of the problem and plan to fix it"
+      action: read_session_log | agent_test | agent_test_modify | draft | resume
+      action_input:
+        # for read_session_log: agent_id, session_id
+        # for agent_test: agent_id, session_id, block_name, action
+        # for agent_test_modify: agent_id, session_id, action, patch_json
+        # for draft / resume: (no action_input)
+      ```
+    tools:
+      - read_session_log
+      - agent_test
+      - agent_test_modify
+    transitions:
+      read_session_log: review_read_log_block
+      agent_test: review_run_block
+      agent_test_modify: review_modify_block
+      draft: draft
+      resume: test
+      default: review
+
+  review_read_log_block:
+    type: tool_call
+    tool: read_session_log
+    transitions:
+      default: review
+
+  review_run_block:
+    type: tool_call
+    tool: agent_test
+    transitions:
+      default: review
+
+  review_modify_block:
+    type: tool_call
+    tool: agent_test_modify
+    transitions:
+      default: review
+
+  # ── Phase 5: Done ───────────────────────────────────────────────────────────
+
+  report:
+    type: llm
+    system_prompt: |
+      You are the Agent Creator. The agent is working correctly and the human
+      has approved it.
+
+      ## Phase 5 — Report
+
+      Write a clear completion summary including:
+      - The agent ID and what it does.
+      - File paths written: data/agents/<id>.yaml, data/flows/<id>_loop.yaml.
+      - A brief description of the flow structure (phases, key decisions).
+      - How to invoke the agent: uv run run.py --agent <id> --prompt "..."
+      - Any known limitations or follow-up work suggested.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "summary ready"
+      action: done
+      action_input:
+        summary: |
+          <your full completion report here>
+      ```
+    transitions:
+      done: END
+      default: END
