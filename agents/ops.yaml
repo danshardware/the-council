@@ -1,8 +1,8 @@
 id: ops
 name: Ops
 description: |
-  Configuration agent. Reads, searches, and modifies YAML configuration files
-  (agents, flows, config). Invoked by the CEO or directly to make
+  Configuration agent. Reads, searches, and modifies configuration files
+  (agents, flows, config, schedule). Invoked to make
   system changes on behalf of the user. Applies changes immediately, commits
   them to git, and reports what was done including the commit hash.
 

@@ -171,6 +171,12 @@ class AgentRunner:
         if shared_overrides:
             shared.update(shared_overrides)
 
+        # Propagate channel context into ToolContext so spawn_agent() can forward it.
+        tc: ToolContext = shared["tool_context"]
+        tc.channel_context = shared.get("channel_context")
+        tc._channel_adapter = shared.get("_channel_adapter")
+        tc._discord_loop = shared.get("_discord_loop")
+
         _console.print(Rule(f"[bold green]Council — {self.agent_id} — {session_id}[/bold green]"))
         _console.print(f"[dim]Flow: {flow_file_key}  |  Max iterations: {max_iterations}[/dim]\n")
 
