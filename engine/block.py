@@ -787,7 +787,7 @@ class FlowSwitchBlock(BaseBlock):
         # reply to the same Discord thread / Slack channel / etc.
         from engine.runner import AgentRunner
         shared_overrides: dict = {}
-        for key in ("channel_context", "_channel_adapter", "_conv"):
+        for key in ("channel_context", "_channel_adapter", "_discord_loop", "_conv"):
             if key in prep_res:
                 shared_overrides[key] = prep_res[key]
         runner = AgentRunner(
