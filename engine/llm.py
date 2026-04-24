@@ -160,6 +160,50 @@ def call_llm_conv(
     raise LLMUnavailableError(f"LLM unavailable: {last_exc}") from last_exc  # type: ignore[misc]
 
 
+def _regex_extract_fields(text: str) -> dict[str, Any]:
+    """Regex-based fallback for extracting agent response fields when YAML.safe_load fails.
+
+    Handles the common case where a plain scalar value contains ': ' (colon-space)
+    which is forbidden in YAML plain scalars and causes safe_load to raise.  Only
+    works for flat (non-nested) key: value action_input fields.
+    """
+    result: dict[str, Any] = {}
+    action_m = re.search(r"^action\s*:\s*(\S+)", text, re.MULTILINE)
+    if not action_m:
+        return result
+    result["action"] = action_m.group(1).strip().rstrip("#").strip()
+
+    reasoning_m = re.search(r'^reasoning\s*:\s*"?(.+?)"?\s*$', text, re.MULTILINE)
+    if reasoning_m:
+        result["reasoning"] = reasoning_m.group(1)
+
+    # Extract action_input block: indented lines immediately under 'action_input:'
+    ai_block_m = re.search(
+        r"^action_input\s*:\s*\n((?:[ \t]+.*(?:\n|$))+)", text, re.MULTILINE
+    )
+    if ai_block_m:
+        ai: dict[str, str] = {}
+        for line in ai_block_m.group(1).splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Split on first ': ' to capture key and the full rest-of-line as value.
+            # This correctly preserves ': ' within the value itself (e.g. commit messages).
+            kv_m = re.match(r"^([\w][\w_-]*)\s*:\s*(.*)", stripped)
+            if kv_m:
+                val = kv_m.group(2).strip()
+                # Strip surrounding quotes if the LLM quoted the whole value
+                if len(val) >= 2 and (
+                    (val[0] == '"' and val[-1] == '"')
+                    or (val[0] == "'" and val[-1] == "'")
+                ):
+                    val = val[1:-1]
+                ai[kv_m.group(1)] = val
+        if ai:
+            result["action_input"] = ai
+    return result
+
+
 def _parse_yaml_response(text: str) -> dict[str, Any]:
     """Extract and parse YAML from an LLM response, trying multiple strategies."""
     # Strategy 1: fenced ```yaml ... ``` block
@@ -171,6 +215,11 @@ def _parse_yaml_response(text: str) -> dict[str, Any]:
                 return result
         except Exception:
             pass
+        # Strategy 1b: YAML parse of fenced block failed (e.g. unquoted values containing
+        # ': ') — fall back to regex extraction which handles colon-space correctly.
+        extracted = _regex_extract_fields(fenced.group(1).strip())
+        if extracted.get("action"):
+            return extracted
 
     # Strategy 2: parse the whole response as YAML
     try:

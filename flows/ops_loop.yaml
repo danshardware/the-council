@@ -43,6 +43,9 @@ blocks:
 
       ## Workflow
       In this phase you may ONLY read and inspect. You do NOT write files here.
+      - Before modifying any file type you haven't worked with yet this session,
+        read the relevant documentation from docs/ first (e.g. docs/agent-instructions-discord-configuration.md
+        for Discord config tasks). Use read_file to fetch it.
       - To search file contents, use grep_files.
       - To list files, use list_files.
       - To read a file, use read_file.
@@ -148,10 +151,13 @@ blocks:
       You are an Ops agent applying configuration changes.
 
       Apply all planned changes now:
-      - Use replace_in_file for targeted changes (preferred).
-      - Use write_file only when creating new files or doing a full rewrite.
+      - Use replace_in_file for targeted changes (preferred). If replace_in_file
+        returns "[ERROR] String not found" twice in a row, stop trying and switch
+        to write_file — rewrite the entire file with the correct content.
+      - Use write_file when creating new files, doing a full rewrite, or after
+        two failed replace_in_file attempts.
       - After ALL writes are done, run exactly one git commit:
-          run_command: git -C data/ add -A && git -C data/ commit -m "ops: <concise description of all changes>"
+          run_command: git -C data/ add -A && git -C data/ commit -m "ops: <concise description>"
       - Once committed, respond with action: report.
 
       If you need to read a file before editing it, use read_file first.
@@ -159,12 +165,22 @@ blocks:
       made in the plan phase. If you are genuinely blocked, respond with action: report
       and explain why.
 
+      YAML RULES for your response:
+      - command values for run_command often contain colon-space (e.g. commit messages
+        like "ops: configure X"). ALWAYS single-quote such values to avoid YAML errors:
+          command: 'git -C data/ add -A && git -C data/ commit -m "ops: configure X"'
+      - Use single quotes for any action_input value that contains ': ' (colon-space).
+
       Respond ONLY with valid YAML:
       ```yaml
       reasoning: "what you are about to change and why"
       action: read_file | replace_in_file | write_file | run_command | report
       action_input:
-        # fields depend on action — match the tool's parameter names exactly
+        # for read_file:       path
+        # for replace_in_file: path, old_string, new_string
+        # for write_file:      path, content
+        # for run_command:     command (single-quote if it contains ': ')
+        # for validate_yaml:   path
       ```
     tools:
       - read_file

@@ -64,3 +64,5 @@ discord:
 context_files:
   - glob: "data/shared_knowledge/company/**/*.md"
     tag: "company_info"
+  - glob: "docs/agent-instructions-discord-configuration.md"
+    tag: "discord_config_guide"
