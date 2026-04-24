@@ -410,7 +410,11 @@ class Conversation:
         if messages is None:
             turns = self.conversation
             if _is_top_level:
-                if not include_tools:
+                if not include_tools or not self.tools:
+                    # Strip tool-use history when this block has no tools configured.
+                    # Bedrock requires toolConfig whenever toolUse/toolResult blocks appear
+                    # in the conversation; omitting it (because there are no tools) causes a
+                    # ValidationException even though the intent is to run tool-free.
                     boundary = _find_tool_free_boundary(turns)
                     turns = turns[boundary:]
                 if context_window is not None and context_window < len(turns):
