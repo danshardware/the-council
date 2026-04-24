@@ -279,7 +279,9 @@ class AgentRunner:
                 if line:
                     events.append(json.loads(line))
 
-        start_event = next((e for e in events if e["event"] == "session_start"), None)
+        # Use the LAST session_start so that flow_switch sub-flows are resumed
+        # correctly (the sub-flow appends its own session_start after the outer one).
+        start_event = next((e for e in reversed(events) if e["event"] == "session_start"), None)
         if start_event is None:
             raise ValueError(f"No session_start found in log for '{session_id}'")
 

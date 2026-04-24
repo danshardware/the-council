@@ -801,15 +801,21 @@ class FlowSwitchBlock(BaseBlock):
                 border_style="yellow",
             )
         )
-        runner.run(
+        sub_shared = runner.run(
             prompt=str(prompt),
             flow_name=target_flow,
             session_id=prep_res["session_id"],
             shared_overrides=shared_overrides if shared_overrides else None,
         )
+        return sub_shared
 
-    def post(self, shared: dict, prep_res: dict, exec_res: None) -> str:
-        # The sub-flow has finished; end the current flow normally.
+    def post(self, shared: dict, prep_res: dict, exec_res: dict | None) -> str:
+        # If the sub-flow suspended (e.g. waiting for human input), propagate the
+        # suspension upward so the gateway registers the pending session and does
+        # NOT send the outer session's last message as the response.
+        if exec_res and exec_res.get("suspended"):
+            cp = exec_res.get("checkpoint_path", "")
+            raise SuspendExecution(cp)
         return "default"
 
 
