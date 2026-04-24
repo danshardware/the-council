@@ -815,6 +815,11 @@ class FlowSwitchBlock(BaseBlock):
         # NOT send the outer session's last message as the response.
         if exec_res and exec_res.get("suspended"):
             cp = exec_res.get("checkpoint_path", "")
+            # Mark the channel as already handled so the outer gateway doesn't
+            # also send the outer flow's last message as a response.
+            ctx = shared.get("channel_context")
+            if isinstance(ctx, dict):
+                ctx["_already_sent"] = True
             raise SuspendExecution(cp)
         return "default"
 

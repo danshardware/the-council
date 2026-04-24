@@ -63,9 +63,15 @@ blocks:
         # for ask_human: message (what you're offering)
       ```
     transitions:
-      ask_human: already_done_ask
+      ask_human: already_done_send
       done: END
       default: END
+
+  already_done_send:
+    type: human_reply
+    transitions:
+      replied: already_done
+      default: already_done_ask
 
   already_done_ask:
     type: human_input
@@ -112,9 +118,15 @@ blocks:
         # for write_mission: (no input — proceed when confirmed)
       ```
     transitions:
-      ask_human: interview_ask
+      ask_human: interview_send
       write_mission: write_mission
       default: interview
+
+  interview_send:
+    type: human_reply
+    transitions:
+      replied: interview
+      default: interview_ask
 
   interview_ask:
     type: human_input
@@ -191,10 +203,16 @@ blocks:
     tools:
       - spawn_agent
     transitions:
-      ask_human: agent_setup_ask
+      ask_human: agent_setup_send
       spawn_agent: agent_setup_spawn_block
       channel_setup: channel_setup
       default: channel_setup
+
+  agent_setup_send:
+    type: human_reply
+    transitions:
+      replied: agent_setup
+      default: agent_setup_ask
 
   agent_setup_ask:
     type: human_input
