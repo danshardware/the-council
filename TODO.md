@@ -4,6 +4,7 @@
 
 Each one of them should be discussed for an implementation plan before writing
 
+- Have config files merge instead of overwrite
 - Sessions should show a wrap up with (even if keyboard interrupted):
     - Session ID
     - total tokens used
