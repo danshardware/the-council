@@ -580,7 +580,8 @@ async def _resume_from_human_reply(reply, pending: dict) -> None:
 
     response_text = _extract_final_response(shared)
     if response_text and not ctx.get("_already_sent"):
-        await adapter.send_embed(reply.channel, "Response", response_text, agent_cfg)
+        # Inside a thread — plain text, no embed needed
+        await adapter.send_thread_message(reply.channel, response_text)
 
     if shared.get("suspended"):
         # Agent asked a follow-up question — re-register for another round

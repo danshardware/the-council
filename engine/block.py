@@ -592,7 +592,7 @@ class HumanReplyBlock(BaseBlock):
                     if thread_id:
                         channel = adapter._client.get_channel(int(thread_id))
                         if channel:
-                            await adapter.send_embed(channel, "Message", message, agent_cfg)
+                            await adapter.send_thread_message(channel, message)
                 try:
                     asyncio.run_coroutine_threadsafe(_post_to_thread(), discord_loop).result(timeout=10)
                     ctx["_already_sent"] = True

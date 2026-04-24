@@ -22,6 +22,10 @@ class ChannelAdapter(ABC):
         """Post plain text. ``destination`` is a channel or thread object."""
 
     @abstractmethod
+    async def send_thread_message(self, destination, content: str) -> None:
+        """Post plain text to a thread, chunking at 2000 chars if needed."""
+
+    @abstractmethod
     async def send_embed(
         self,
         destination,
@@ -56,6 +60,18 @@ class DiscordAdapter(ChannelAdapter):
 
     async def send_message(self, destination, content: str) -> None:
         await destination.send(content)
+
+    async def send_thread_message(self, destination, content: str) -> None:
+        """Send plain text to a thread, splitting at Discord's 2000-char message limit."""
+        _LIMIT = 2000
+        while len(content) > _LIMIT:
+            split_at = content.rfind("\n", 0, _LIMIT)
+            if split_at == -1:
+                split_at = _LIMIT
+            await destination.send(content[:split_at])
+            content = content[split_at:].lstrip("\n")
+        if content:
+            await destination.send(content)
 
     async def send_embed(
         self,
