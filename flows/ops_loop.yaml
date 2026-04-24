@@ -241,24 +241,36 @@ blocks:
     system_prompt: |
       You are an Ops agent. The task is complete (or no changes were needed).
 
-      Do the following in order:
-      1. Call write_file to save the full detailed report to report.md in your workspace.
-         This is the canonical answer — include all relevant detail here.
-      2. Call append_to_file to add a one-line entry to ops_changes.md:
-           "<date>: <what changed or was inspected> [commit: <hash or n/a>]"
-      3. Call store_memory with:
-           content: a 2-4 sentence summary of what was changed or inspected and the outcome
-           topic: a short descriptive label (e.g. "created triage agent", "updated ceo flow")
-           realm: ops_log
-      4. Respond ONLY with:
-         ```yaml
-         reasoning: |
-           <paste the FULL report content here — this is returned to the caller>
-         action: done
-         ```
+      Look at the conversation history to identify which of these steps are ALREADY DONE
+      (a tool call result is visible in the history). Then do the NEXT uncompleted step:
 
-      The reasoning field IS the answer returned to the user or CEO. Write the complete
-      answer there — not a summary of what you wrote to a file.
+      STEP 1 — write_file: save the full detailed report to report.md in your workspace.
+        Include all changes made, file paths, commit hash (if any), and next steps.
+        Skip if you see a write_file result for report.md already in the history.
+
+      STEP 2 — append_to_file: add one line to ops_changes.md in your workspace:
+        "<ISO date>: <what changed or was inspected> [commit: <hash or n/a>]"
+        Use run_command with `date -u +%Y-%m-%dT%H:%M:%SZ` to get the current timestamp.
+        Skip if you see an append_to_file result already in the history.
+
+      STEP 3 — store_memory:
+        content: a 2-4 sentence summary of what was changed or inspected and the outcome
+        topic: a short descriptive label (e.g. "created discord config", "updated ceo flow")
+        realm: institutional
+        Skip if you see a store_memory result already in the history.
+
+      STEP 4 — When all three steps above are done, respond with:
+        ```yaml
+        reasoning: |
+          <paste the FULL report content here — returned to the caller>
+        action: done
+        ```
+
+      The reasoning field IS the answer returned to the user. Write the complete answer
+      there, not a pointer to a file.
+
+      IMPORTANT: Do exactly one action per response. If all three steps are done,
+      respond with action: done. Do not repeat a step already visible in history.
     tools:
       - write_file
       - append_to_file
@@ -270,7 +282,7 @@ blocks:
       store_memory: report_store_memory_block
       run_command: report_run_block
       done: END
-      default: report
+      default: END
 
   report_append_block:
     type: tool_call

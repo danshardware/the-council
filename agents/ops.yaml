@@ -38,6 +38,7 @@ permissions:
     - find
     - sed
     - awk
+    - date
     - ls
     - cat
     - head
