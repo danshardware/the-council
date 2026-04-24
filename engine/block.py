@@ -606,9 +606,10 @@ class HumanReplyBlock(BaseBlock):
                 prep_res["agent_id"],
                 prep_res["session_id"],
             )
-            save_checkpoint(prep_res, cp_path)
+            # Set pending_checkpoint BEFORE saving so the checkpoint captures it
             ctx["pending_checkpoint"] = str(cp_path)
             ctx["retry_count"] = 0
+            save_checkpoint(prep_res, cp_path)
             raise SuspendExecution(str(cp_path))
 
         if message:
