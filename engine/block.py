@@ -783,8 +783,13 @@ class FlowSwitchBlock(BaseBlock):
             )
 
         # Launch the new flow in-process — re-uses the same agent + session_id so
-        # logs are grouped together.
+        # logs are grouped together.  Forward channel context so the new flow can
+        # reply to the same Discord thread / Slack channel / etc.
         from engine.runner import AgentRunner
+        shared_overrides: dict = {}
+        for key in ("channel_context", "_channel_adapter", "_conv"):
+            if key in prep_res:
+                shared_overrides[key] = prep_res[key]
         runner = AgentRunner(
             agent_id=prep_res["agent_id"],
             logs_dir=str(prep_res.get("logs_dir", "logs")),
@@ -800,6 +805,7 @@ class FlowSwitchBlock(BaseBlock):
             prompt=str(prompt),
             flow_name=target_flow,
             session_id=prep_res["session_id"],
+            shared_overrides=shared_overrides if shared_overrides else None,
         )
 
     def post(self, shared: dict, prep_res: dict, exec_res: None) -> str:
