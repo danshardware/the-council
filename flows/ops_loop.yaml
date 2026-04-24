@@ -255,7 +255,7 @@ blocks:
 
       STEP 3 — store_memory:
         content: a 2-4 sentence summary of what was changed or inspected and the outcome
-        topic: a short descriptive label (e.g. "created discord config", "updated ceo flow")
+        topic: ops_log
         realm: institutional
         Skip if you see a store_memory result already in the history.
 
