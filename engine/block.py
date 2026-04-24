@@ -748,6 +748,64 @@ class SetStateBlock(BaseBlock):
         return transition
 
 
+# ---------------------------------------------------------------------------
+# FlowSwitch block — ends the current flow and immediately starts a named
+# flow on the same agent (e.g. switching concierge_loop → concierge_onboarding)
+# ---------------------------------------------------------------------------
+
+class FlowSwitchBlock(BaseBlock):
+    """Switch to a different named flow for the same agent.
+
+    YAML config:
+        type: flow_switch
+        flow: onboarding          # key from the agent's `flows:` map
+        prompt_from: action_input # optional: read prompt from shared action_input.message
+        prompt: "Starting onboarding..."  # or a literal prompt override
+    """
+
+    def prep(self, shared: dict) -> dict:
+        self._check_iterations(shared)
+        self._log(shared, "block_enter", iteration=shared["iteration"])
+        return dict(shared)
+
+    def exec(self, prep_res: dict) -> None:
+        target_flow: str = self.config.get("flow", "main")
+        # Determine the prompt to pass to the new flow
+        if self.config.get("prompt"):
+            prompt = self.config["prompt"]
+        else:
+            # Fall back to action_input.message / action_input.task / original prompt
+            ai = prep_res.get("action_input") or {}
+            prompt = (
+                ai.get("message")
+                or ai.get("task")
+                or prep_res.get("messages", [{}])[0].get("content", "")
+            )
+
+        # Launch the new flow in-process — re-uses the same agent + session_id so
+        # logs are grouped together.
+        from engine.runner import AgentRunner
+        runner = AgentRunner(
+            agent_id=prep_res["agent_id"],
+            logs_dir=str(prep_res.get("logs_dir", "logs")),
+        )
+        _console.print(
+            Panel(
+                f"Switching to flow [bold]{target_flow!r}[/bold]",
+                title=f"🔀  FlowSwitch • {self.block_id}",
+                border_style="yellow",
+            )
+        )
+        runner.run(
+            prompt=str(prompt),
+            flow_name=target_flow,
+            session_id=prep_res["session_id"],
+        )
+
+    def post(self, shared: dict, prep_res: dict, exec_res: None) -> str:
+        # The sub-flow has finished; end the current flow normally.
+        return "default"
+
 
 BLOCK_TYPES = {
     "llm": LLMBlock,
@@ -757,6 +815,7 @@ BLOCK_TYPES = {
     "human_input": HumanInputBlock,
     "human_reply": HumanReplyBlock,
     "set_state": SetStateBlock,
+    "flow_switch": FlowSwitchBlock,
 }
 
 

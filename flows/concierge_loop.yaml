@@ -257,20 +257,10 @@ blocks:
   # ── Onboarding redirect ──────────────────────────────────────────────────────
 
   onboard_redirect:
-    type: llm
-    system_prompt: |
-      Onboarding is needed. Let the human know you will walk them through
-      the initial Council setup. The onboarding flow will be launched next.
-
-      Respond ONLY with valid YAML:
-      ```yaml
-      reasoning: "onboarding is required"
-      action: done
-      action_input:
-        message: "Let's get The Council set up for your organisation. I'll guide you through the onboarding process now."
-      ```
+    type: flow_switch
+    flow: onboarding
+    prompt: "Begin onboarding."
     transitions:
-      done: END
       default: END
 
   # ── Done ─────────────────────────────────────────────────────────────────────
