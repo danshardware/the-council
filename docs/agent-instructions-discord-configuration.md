@@ -37,7 +37,7 @@ guilds:
       - channel_id: "1111111111111111111"
         name: "ops-chat"
         agent: ops
-    # true  → unmapped channels go to Nova Lite for routing
+    # true  → unmapped channels go to LLM routing
     # false → unmapped channels get a clarification message from the bot
     routing_fallback_llm: true
 
