@@ -15,7 +15,7 @@ wheels/
 
 # All mutable state lives under data/ (mounted volume in production)
 # Old locations kept here during transition period
-data/
+/data/
 logs/
 workspace/
 memory_db/
