@@ -5,6 +5,7 @@
 Each one of them should be discussed for an implementation plan before writing
 
 - Have config files merge instead of overwrite
+- skills system (like anthropic's but with python tools as well)
 - Sessions should show a wrap up with (even if keyboard interrupted):
     - Session ID
     - total tokens used
