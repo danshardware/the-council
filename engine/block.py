@@ -53,6 +53,10 @@ def _run_output_guardrail(
     - On rejected: injects a [SYSTEM] rejection notice into shared["messages"] / live conv
     - Logs the result as "output_guardrail" event
     """
+    # Guardrail can be disabled by empty prompt
+    if not guardrail_prompt.strip():
+        return action
+
     user_msg = (
         f"Proposed action: {action}\n"
         f"Reasoning: {reasoning[:400]}\n"
