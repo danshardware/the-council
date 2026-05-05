@@ -33,6 +33,79 @@ def _push_message(shared: dict, role: str, content: str) -> None:
         conv.conversation.append(Message(role, text=content))
 
 
+def _run_output_guardrail(
+    shared: dict,
+    action: str,
+    reasoning: str,
+    action_input: dict,
+    guardrail_prompt: str,
+    model_id: str = "us.amazon.nova-lite-v1:0",
+) -> str:
+    """
+    Run the output safety guardrail.
+
+    Returns the effective action string:
+    - On approved/warn: returns `action` unchanged
+    - On rejected: returns "default" (forces LLM to retry same block)
+
+    Side-effects:
+    - On warn: injects a [SYSTEM] advisory into shared["messages"] / live conv
+    - On rejected: injects a [SYSTEM] rejection notice into shared["messages"] / live conv
+    - Logs the result as "output_guardrail" event
+    """
+    user_msg = (
+        f"Proposed action: {action}\n"
+        f"Reasoning: {reasoning[:400]}\n"
+        f"Action input:\n{yaml.dump(action_input, default_flow_style=False)[:400]}"
+    )
+
+    parsed, _, _ = call_llm(
+        model_id=model_id,
+        system_prompt=guardrail_prompt,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    verdict = parsed.get("verdict", "approved")
+    reason = parsed.get("reason", "")
+
+    if verdict == "rejected":
+        _push_message(
+            shared, "user",
+            f"[SYSTEM] Your proposed action '{action}' was blocked. "
+            f"Reason: {reason}. Reconsider and propose a different action."
+        )
+        # Log the event
+        logger = shared.get("logger")
+        if logger:
+            logger.log_event(
+                shared,
+                "output_guardrail",
+                action=action,
+                verdict=verdict,
+                reason=reason,
+            )
+        return "default"
+
+    if verdict == "warn":
+        _push_message(
+            shared, "user",
+            f"[SYSTEM] Output advisory: {reason}. "
+            "Review your proposed action before proceeding."
+        )
+
+    # Log the event (for both approved and warn)
+    logger = shared.get("logger")
+    if logger:
+        logger.log_event(
+            shared,
+            "output_guardrail",
+            action=action,
+            verdict=verdict,
+            reason=reason,
+        )
+
+    return action  # approved or warned-but-continuing
+
+
 class MaxIterationsError(Exception):
     pass
 
@@ -281,6 +354,20 @@ class LLMBlock(BaseBlock):
                 border_style="green",
             )
         )
+        # === OUTPUT GUARDRAIL ===
+        _output_prompt = (
+            shared.get("_output_guardrail_prompt")  # set by runner from agent YAML (A5)
+            or ""
+        )
+        if _output_prompt:
+            action = _run_output_guardrail(
+                shared=shared,
+                action=action,
+                reasoning=shared.get("reasoning", ""),
+                action_input=shared.get("action_input", {}),
+                guardrail_prompt=_output_prompt,
+            )
+        # ========================
         return action
 
 

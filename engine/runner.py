@@ -167,6 +167,14 @@ class AgentRunner:
             ),
         }
 
+        # Set up the output guardrail prompt (used by LLMBlock.post())
+        from engine.template import _load_config_dir
+        _guardrail_cfg = _load_config_dir().get("guardrails", {})
+        shared["_output_guardrail_prompt"] = (
+            agent_config.get("guardrails", {}).get("output")   # per-agent override (A5)
+            or _guardrail_cfg.get("output_safety", "")
+        )
+
         # Merge any overrides from the calling context (e.g. channel gateway)
         if shared_overrides:
             shared.update(shared_overrides)
