@@ -118,6 +118,8 @@ The **action string** returned by `post` selects the next node via `successors`.
 | `iteration` | `int` | Current iteration count |
 | `_conv` | `Conversation` | Live Bedrock conversation object |
 | `_conv_turns` | `list` | Serialised conversation for checkpoints |
+| `_input_guardrail_prompt` | `str` | Resolved system prompt for input safety checks (agent override or system default) |
+| `_output_guardrail_prompt` | `str` | Resolved system prompt for output safety checks (agent override or system default) |
 | `write_paths` | `list[str]` | Stable writable dirs from permissions |
 | `read_paths` | `list[str]` | Read-only dirs from permissions |
 
@@ -198,6 +200,14 @@ guard:
 ```
 
 A rejected verdict automatically injects a `[SYSTEM]` message into the conversation so the LLM knows its action was blocked.
+
+**Built-in Guardrail Prompts (Automatic):**
+
+Two system-level guardrails run automatically in every agent session:
+- **Input safety** (`_input_guardrail_prompt`): Checks incoming user prompts for injection attacks, harmful content, and off-topic abuse before the flow starts. Verdicts: `approved` (proceed), `warn` (proceed + inject warning), `rejected` (block flow).
+- **Output safety** (`_output_guardrail_prompt`): Checks each LLM block's proposed action before transition. Catches scope creep, prompt injection echoes, and data exfiltration. Verdicts: `approved` (proceed), `warn` (proceed + inject warning), `rejected` (retry block).
+
+Both use the default system prompts from `config/guardrails.yaml` (`input_safety` and `output_safety` keys). Agents may override them in their YAML config (see **Agent YAML Structure** below).
 
 ### `tool_call`
 
@@ -330,10 +340,21 @@ memory:
   realms:
     - knowledge_base
 
+guardrails:               # optional: override default input/output safety prompts
+  input: |                # custom system prompt for input safety checks
+    You are an input safety reviewer...
+  output: |               # custom system prompt for output safety checks
+    You are an output safety reviewer...
+
 context_files:            # injected verbatim into every LLM block system prompt
   - glob: "shared_knowledge/company/**/*.md"
     tag: "company_info"   # wraps content in <company_info>…</company_info>
 ```
+
+**Guardrail rules:**
+- If `guardrails.input` is present, it overrides `config/guardrails.yaml`'s `input_safety` prompt for this agent.
+- If `guardrails.output` is present, it overrides the `output_safety` prompt.
+- If either is absent, the system default is used.
 
 **Path rules:**
 - Paths starting with `data/` are rewritten to `DATA_DIR/<suffix>` at runtime

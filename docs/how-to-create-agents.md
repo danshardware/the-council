@@ -145,6 +145,8 @@ transitions:
 ### `guardrail`
 Same as `llm` but shown with a shield icon. Designed to review and return `approved`, `needs_confirmation`, or `rejected`/`flagged`.
 
+**Note:** This describes custom guardrail blocks that you write into flows. In addition, the system runs automatic safety checks on every session: input safety (checks user prompts before the flow starts) and output safety (checks LLM block actions before transitions). See [AGENTS.md](../AGENTS.md) for details on the built-in system-level guardrails.
+
 ```yaml
 type: guardrail
 model_id: us.amazon.nova-lite-v1:0   # use a cheap model
