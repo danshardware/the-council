@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from rich.console import Console
@@ -51,6 +52,28 @@ def _sanitise_user_input(prompt: str) -> str:
         '[USER-SUPPLIED-SYSTEM]',
         prompt,
     )
+
+
+def _resolve_guardrail_prompt(
+    agent_config: dict,
+    key: Literal["input", "output"],
+    system_defaults: dict,
+) -> str:
+    """
+    Return the guardrail prompt to use for `key` ("input" or "output").
+
+    Priority:
+    1. agent_config["guardrails"][key] if non-empty
+    2. system_defaults["input_safety"] / system_defaults["output_safety"]
+    3. "" (empty — caller should skip the guardrail check)
+    """
+    agent_override = (
+        agent_config.get("guardrails", {}).get(key, "") or ""
+    ).strip()
+    if agent_override:
+        return agent_override
+    fallback_key = "input_safety" if key == "input" else "output_safety"
+    return (system_defaults.get(fallback_key, "") or "").strip()
 
 
 class AgentRunner:
@@ -182,12 +205,16 @@ class AgentRunner:
             ),
         }
 
-        # Set up the output guardrail prompt (used by LLMBlock.post())
+        # Set up the guardrail prompts (used by A2 and A3)
         from engine.template import _load_config_dir
-        _guardrail_cfg = _load_config_dir().get("guardrails", {})
-        shared["_output_guardrail_prompt"] = (
-            agent_config.get("guardrails", {}).get("output")   # per-agent override (A5)
-            or _guardrail_cfg.get("output_safety", "")
+        _guardrail_defaults = _load_config_dir().get("guardrails", {})
+
+        # Resolve both guardrail prompts using per-agent overrides if available
+        shared["_input_guardrail_prompt"] = _resolve_guardrail_prompt(
+            agent_config, "input", _guardrail_defaults
+        )
+        shared["_output_guardrail_prompt"] = _resolve_guardrail_prompt(
+            agent_config, "output", _guardrail_defaults
         )
 
         # Merge any overrides from the calling context (e.g. channel gateway)
@@ -214,22 +241,13 @@ class AgentRunner:
             )
 
             # -------------------------------------------------
-            # Step 1 — Resolve the input safety guardrail prompt
-            # -------------------------------------------------
-            from engine.template import _load_config_dir
-            _guardrail_prompt = (
-                agent_config.get("guardrails", {}).get("input")   # per-agent override (A5)
-                or _load_config_dir().get("guardrails", {}).get("input_safety", "")
-            )
-
-            # -------------------------------------------------
-            # Step 2 — Run the input guardrail check if configured
+            # Step 1 — Run the input guardrail check if configured (prompt resolved earlier)
             # -------------------------------------------------
             # Skip guardrail check on resume (prior_messages indicates resume path)
-            if _guardrail_prompt and not prior_messages:
+            if shared["_input_guardrail_prompt"] and not prior_messages:
                 should_proceed = _check_input_guardrail(
                     prompt=prompt,
-                    guardrail_prompt=_guardrail_prompt,
+                    guardrail_prompt=shared["_input_guardrail_prompt"],
                     model_id="us.amazon.nova-lite-v1:0",
                     shared=shared,
                 )
@@ -237,7 +255,7 @@ class AgentRunner:
                     return shared
 
             # -------------------------------------------------
-            # Step 3 — Run the flow
+            # Step 2 — Run the flow
             # -------------------------------------------------
             try:
                 flow._run(shared)
