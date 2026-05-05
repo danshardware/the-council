@@ -219,9 +219,8 @@ def test_agent_guardrail_override():
 def test_resume_does_not_recheck_guardrail():
     """When resuming a session, the guardrail should not be checked again.
 
-    Note: The current implementation calls the guardrail on resume because
-    resume() calls run(), which includes the guardrail check. This is OK
-    because the prompt was already validated in the initial run.
+    The initial prompt was already validated in the first run, so we skip
+    the guardrail check on resume to avoid duplicate validation.
     """
     mock_flow = MockFlow()
 
@@ -245,7 +244,7 @@ def test_resume_does_not_recheck_guardrail():
                     "flows": {"main": "main"},
                     "max_iterations": 50,
                 }):
-                    # Resume from a prior session
+                    # Resume from a prior session - guardrail should be skipped
                     shared = runner.run(
                         prompt="Original prompt",
                         prior_messages=[{"role": "user", "content": "Original prompt"}],
@@ -254,7 +253,10 @@ def test_resume_does_not_recheck_guardrail():
             finally:
                 template._load_config_dir = original_load_config_dir
 
-    # The key test: verify that flow ran (even on resume)
+    # Verify guardrail was NOT called since this is a resume (prior_messages provided)
+    mock_call.assert_not_called()
+
+    # Verify that flow ran (even on resume)
     assert mock_flow._run_called is True
 
 
