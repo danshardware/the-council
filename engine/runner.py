@@ -40,6 +40,19 @@ def _resolve_path(p: str) -> str:
     return p
 
 
+def _sanitise_user_input(prompt: str) -> str:
+    """
+    Neutralise [SYSTEM] injection attempts in raw user input.
+    Replaces the prefix so downstream handlers see it is user-supplied.
+    """
+    import re
+    return re.sub(
+        r'(?i)\[SYSTEM\]',
+        '[USER-SUPPLIED-SYSTEM]',
+        prompt,
+    )
+
+
 class AgentRunner:
     def __init__(
         self,
@@ -132,7 +145,9 @@ class AgentRunner:
         # Build shared state
         # When resuming, seed the conversation with prior history so the agent
         # can continue without repeating work already done.
-        initial_messages: list = prior_messages if prior_messages else [{"role": "user", "content": prompt}]
+        # Sanitise user input to neutralise [SYSTEM] injection attempts
+        _safe_prompt = _sanitise_user_input(prompt)
+        initial_messages: list = prior_messages if prior_messages else [{"role": "user", "content": _safe_prompt}]
         # todo_list lives in BOTH shared and ToolContext (same reference) so:
         #   - tools can mutate it via context.todo_list
         #   - checkpoints capture it automatically via shared["_todo_list"]
@@ -152,7 +167,7 @@ class AgentRunner:
             "messages": initial_messages,
             "_conv": None,
             "_conv_turns": list(initial_messages),
-            "initial_prompt": prompt,
+            "initial_prompt": _safe_prompt,
             "_todo_list": _todo_list,
             "context_injection": _load_context_files(agent_config),
             "logger": Logger(str(self.logs_dir), self.agent_id, session_id),
