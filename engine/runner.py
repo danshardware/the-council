@@ -202,7 +202,8 @@ class AgentRunner:
             # -------------------------------------------------
             # Step 2 — Run the input guardrail check if configured
             # -------------------------------------------------
-            if _guardrail_prompt:
+            # Skip guardrail check on resume (prior_messages indicates resume path)
+            if _guardrail_prompt and not prior_messages:
                 should_proceed = _check_input_guardrail(
                     prompt=prompt,
                     guardrail_prompt=_guardrail_prompt,
