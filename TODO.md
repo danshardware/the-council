@@ -4,6 +4,7 @@
 
 Each one of them should be discussed for an implementation plan before writing
 
+- Agent Guardrail fix tests (see bottom of this doc)
 - Have config files merge instead of overwrite
 - skills system (like anthropic's but with python tools as well)
 - Sessions should show a wrap up with (even if keyboard interrupted):
@@ -18,6 +19,7 @@ Each one of them should be discussed for an implementation plan before writing
     - ensure human override works
 - Allow writes to agent's long-term file repo as well as its workspace directory
 - Per turn prompt injection and ensure it doesn't get re-inserted if it does not change. Compaction should clear this cache.
+- A3 — LLMBlock Output Guardrail should check when we move from block to block, not after each LLM output. It should also do all of the agent output with the user intent added at the begining
 
 ## Blocks
 
@@ -180,3 +182,32 @@ FUTURE EXTENSION
 - [How claude remembers your project](https://code.claude.com/docs/en/memory)
 - [AgentSpec](https://github.com/haoyuwang99/AgentSpec/tree/master/src/rules/apollo) Agentic Guardrails
 - [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+
+---
+
+Approach for the 3 Skipped Tests in the agent guardrail:
+1. test_custom_input_prompt_is_used (Group 4)
+
+•  Need to create a test agent that has custom guardrail prompts
+•  Could use the agent-creator agent to create it (as suggested), or manually create a simple test agent YAML
+•  The test should temporarily use this agent and verify it uses its custom guardrail prompt
+•  After test, clean up the test agent
+2 & 3. Group 3 output guardrail tests
+
+•  Need to create fake flows with LLMBlocks that have adversarial prompts injected
+•  Create a test flow YAML in data/flows/ that simulates an LLMBlock with injected content
+•  Run AgentRunner with this flow and verify the guardrail blocks the injected action
+•  This is harder because it requires making an LLM actually generate a bad response
+My recommended approach:
+
+ 1.  For Group 4: Use the agent-creator agent to create a simple test agent (as user suggested), or manually create a YAML
+ 2.  For Group 3: Create a simple test flow YAML and test it - might need to craft a prompt that reliably makes the LLM generate a bad action
+Or we could do it simpler:
+
+ 1.  Just create a test agent YAML manually (simpler than calling the agent)
+ 2.  Create test flow YAMLs manually (understand the flow schema first)
+Which approach do you prefer?
+
+ 1.  Call agent-creator agent to auto-generate test fixtures
+ 2.  Manually create test fixtures (agent YAML + flow YAML)
+ 3.  Some combination

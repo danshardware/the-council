@@ -190,7 +190,7 @@ SOURCE PLAN: Planning/<FeatureName>/<track>/<task-file>.md
 
 Read the source plan file listed above. Then:
 
-1. Create a git branch named `<feature-slug>/<task-id>` based off the current
+1. Create a git branch named `FEATURE/<task-id>` based off the current
    branch. If the branch already exists, check it out.
 
 2. Read every file listed in the "Files Changed" section of the plan.
