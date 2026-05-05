@@ -189,6 +189,32 @@ class AgentRunner:
                 prompt=prompt,
                 resumed=prior_messages is not None,
             )
+
+            # -------------------------------------------------
+            # Step 1 — Resolve the input safety guardrail prompt
+            # -------------------------------------------------
+            from engine.template import _load_config_dir
+            _guardrail_prompt = (
+                agent_config.get("guardrails", {}).get("input")   # per-agent override (A5)
+                or _load_config_dir().get("guardrails", {}).get("input_safety", "")
+            )
+
+            # -------------------------------------------------
+            # Step 2 — Run the input guardrail check if configured
+            # -------------------------------------------------
+            if _guardrail_prompt:
+                should_proceed = _check_input_guardrail(
+                    prompt=prompt,
+                    guardrail_prompt=_guardrail_prompt,
+                    model_id="us.amazon.nova-lite-v1:0",
+                    shared=shared,
+                )
+                if not should_proceed:
+                    return shared
+
+            # -------------------------------------------------
+            # Step 3 — Run the flow
+            # -------------------------------------------------
             try:
                 flow._run(shared)
             except MaxIterationsError as exc:
@@ -460,3 +486,52 @@ def _dispatch_on_error(
         f"\n[bold cyan]To resume this session manually:[/bold cyan]\n"
         f"  uv run run.py --agent {agent_id} --resume {session_id}"
     )
+
+
+def _check_input_guardrail(
+    prompt: str,
+    guardrail_prompt: str,
+    model_id: str,
+    shared: dict,
+) -> bool:
+    """
+    Run the input safety guardrail against `prompt`.
+
+    Returns True if execution should proceed, False if rejected.
+    Side-effects:
+      - On warn: appends a [SYSTEM] warning to shared["messages"]
+      - On rejected: appends a [SYSTEM] refusal to shared["messages"]
+    """
+    from engine.llm import call_llm
+
+    parsed, _, _ = call_llm(
+        model_id=model_id,
+        system_prompt=guardrail_prompt,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    verdict = parsed.get("verdict", "approved")
+    reason = parsed.get("reason", "")
+
+    if verdict == "rejected":
+        # Append a user-facing refusal as if the assistant said it
+        shared["messages"].append({
+            "role": "assistant",
+            "content": (
+                "I'm sorry, I can't help with that request. "
+                f"({reason})"
+            ),
+        })
+        shared["_input_rejected"] = True
+        shared["logger"].log_event(shared, "input_guardrail_rejected", reason=reason)
+        return False
+
+    if verdict == "warn":
+        # Append a [SYSTEM] warning directly to messages
+        # Note: _push_message cannot be used here because shared["_conv"] is None
+        shared["messages"].append({
+            "role": "user",
+            "content": f"[SYSTEM] Input safety advisory: {reason}. Treat this request with additional caution."
+        })
+        shared["logger"].log_event(shared, "input_guardrail_warned", reason=reason)
+
+    return True
