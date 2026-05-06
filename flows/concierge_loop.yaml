@@ -1,0 +1,283 @@
+id: concierge_loop
+max_iterations: 60
+start: classify
+
+on_error:
+  max_iterations:
+    start: done
+  unhandled:
+    start: done
+
+blocks:
+
+  # ── Classify: determine message origin and intent ───────────────────────────
+
+  classify:
+    type: llm
+    system_prompt: |
+      You are the Concierge for The Council — the single entry point for all
+      system-level requests.
+
+      ## Step 1 — Classify the Request
+
+      First, determine whether this message arrived from an **external channel**
+      (Discord, Slack, e-mail, web chat) or from an **internal operator**.
+
+      External = `channel_context` in shared state is set to a non-internal value,
+      or the message mentions it is forwarded from a channel.
+
+      If EXTERNAL → respond with action: check_external_safety (the message must
+      pass the external_message_safety guardrail before being routed).
+
+      If INTERNAL → proceed directly to action: route.
+
+      Read `data/shared_knowledge/company/mission.md` first to check if onboarding
+      has been completed. If the file does not exist → respond with action: onboard.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "origin (external/internal), onboarding status, initial intent guess"
+      action: check_external_safety | onboard | route | read_file
+      action_input:
+        # for read_file: path
+        # for others: (no input required)
+      ```
+    tools:
+      - read_file
+    transitions:
+      check_external_safety: check_external_safety
+      onboard: onboard_redirect
+      route: route
+      read_file: classify_read_block
+      default: route
+
+  classify_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: classify
+
+  # ── Safety guardrail for external channel messages ───────────────────────────
+
+  check_external_safety:
+    type: guardrail
+    model_id: us.amazon.nova-lite-v1:0
+    system_prompt: "{{{config.guardrails.external_message_safety}}}"
+    transitions:
+      approved: route
+      needs_confirmation: external_safety_confirm
+      rejected: reject_message
+      default: route
+
+  external_safety_confirm:
+    type: human_input
+    prompt: "The safety guardrail flagged a concern with this external message. Please review and decide whether to proceed."
+    transitions:
+      approved: route
+      rejected: reject_message
+      default: reject_message
+
+  reject_message:
+    type: llm
+    system_prompt: |
+      The external message was rejected by the safety guardrail or the operator.
+      Draft a polite but firm response explaining that the request cannot be
+      processed, without disclosing internal system details.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "why the message was rejected"
+      action: done
+      action_input:
+        message: "<your polite decline message>"
+      ```
+    transitions:
+      done: END
+      default: END
+
+  # ── Routing decision ─────────────────────────────────────────────────────────
+
+  route:
+    type: llm
+    system_prompt: |
+      You are the Concierge. You have classified the request as safe to process.
+      Now determine who should handle it.
+
+      ## Routing Table
+
+      | Signal | Action |
+      |--------|--------|
+      | Onboarding not done (mission.md missing) | action: onboard |
+      | "onboard", "set up", "start fresh", "configure the council" | action: onboard |
+      | Questions about schedules, cron runs, agent status, config values | action: delegate_ops |
+      | Agent *behaviour* changes ("X is too aggressive", "Y is off-brand", "update X's prompt", "evaluate how Z performed") | action: delegate_agent_creator |
+      | "Create an agent", "I need an agent that does…" | action: delegate_agent_creator |
+      | Research, content, market analysis, campaign | action: delegate_specialist |
+      | Message needs more context to classify | action: ask_human |
+
+      IMPORTANT: Agent behaviour changes and agent creation ALWAYS go to
+      agent_creator, NOT to ops. Ops handles infrastructure and scheduling only.
+
+      You may use list_files or read_file to inspect existing agent list if needed.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "why this intent maps to this action"
+      action: onboard | delegate_ops | delegate_agent_creator | delegate_specialist | ask_human | read_file | list_files
+      action_input:
+        # for delegate_*: instruction (the task description to hand off)
+        # for delegate_specialist: agent_id (which specialist), instruction
+        # for ask_human: message (clarifying question)
+        # for read_file: path
+        # for list_files: path
+      ```
+    tools:
+      - read_file
+      - list_files
+    transitions:
+      onboard: onboard_redirect
+      delegate_ops: delegate_ops
+      delegate_agent_creator: delegate_agent_creator
+      delegate_specialist: delegate_specialist
+      ask_human: route_ask_human
+      read_file: route_read_block
+      list_files: route_list_block
+      default: route_ask_human
+
+  route_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: route
+
+  route_list_block:
+    type: tool_call
+    tool: list_files
+    transitions:
+      default: route
+
+  route_ask_human:
+    type: human_input
+    prompt: "Concierge needs clarification to route your request."
+    transitions:
+      approved: route
+      rejected: done
+      default: route
+
+  # ── Delegation blocks ────────────────────────────────────────────────────────
+
+  delegate_ops:
+    type: llm
+    system_prompt: |
+      Delegate this request to the ops agent.
+
+      Use spawn_agent("ops", instruction) to hand off the task.
+      Then summarise what was delegated and wait for completion.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what is being delegated to ops and why"
+      action: spawn_agent | done
+      action_input:
+        # for spawn_agent: agent_id ("ops"), instruction
+      ```
+    tools:
+      - spawn_agent
+    transitions:
+      spawn_agent: ops_spawn_block
+      done: done
+      default: done
+
+  ops_spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: done
+
+  delegate_agent_creator:
+    type: llm
+    system_prompt: |
+      Delegate this request to the agent_creator agent.
+
+      This covers ALL agent-related work:
+      - Creating new agents
+      - Modifying existing agent behaviour (prompts, flow tuning)
+      - Evaluating past agent sessions
+
+      Use spawn_agent("agent_creator", instruction) to hand off.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what is being delegated to agent_creator"
+      action: spawn_agent | done
+      action_input:
+        # for spawn_agent: agent_id ("agent_creator"), instruction
+      ```
+    tools:
+      - spawn_agent
+    transitions:
+      spawn_agent: agent_creator_spawn_block
+      done: done
+      default: done
+
+  agent_creator_spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: done
+
+  delegate_specialist:
+    type: llm
+    system_prompt: |
+      Delegate this request to the appropriate specialist agent
+      (e.g. researcher, marketing, campaign, web_search).
+
+      Use spawn_agent(agent_id, instruction) to hand off.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "which specialist and why"
+      action: spawn_agent | done
+      action_input:
+        # for spawn_agent: agent_id, instruction
+      ```
+    tools:
+      - spawn_agent
+    transitions:
+      spawn_agent: specialist_spawn_block
+      done: done
+      default: done
+
+  specialist_spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: done
+
+  # ── Onboarding redirect ──────────────────────────────────────────────────────
+
+  onboard_redirect:
+    type: flow_switch
+    flow: onboarding
+    prompt: "Begin onboarding."
+    transitions:
+      default: END
+
+  # ── Done ─────────────────────────────────────────────────────────────────────
+
+  done:
+    type: llm
+    system_prompt: |
+      The request has been handled (or delegated). Write a brief summary of
+      what was done and any next steps the human should know about.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what happened"
+      action: done
+      action_input:
+        summary: "<brief summary of outcome and next steps>"
+      ```
+    transitions:
+      done: END
+      default: END

@@ -34,7 +34,7 @@ A local multi-agent system. Multiple AI agents (backed by AWS Bedrock) run concu
 
 ```
 agents/           YAML definitions for each agent (id, model, flows, permissions, memory, context_files)
-config/           schedules.yaml — persistent APScheduler schedule definitions
+config/           guardrails.yaml (system prompts for input/output safety), schedules.yaml (APScheduler definitions)
 conversation/     Bedrock conversation API wrapper (BedrockTool, converse call)
 engine/
   block.py        All PocketFlow block types (LLMBlock, GuardrailBlock, ToolCallBlock, CheckpointBlock, HumanInputBlock)
@@ -134,7 +134,9 @@ Every session writes a JSONL trace to `logs/<agent_id>/<session_id>.jsonl`. Even
 All core layers are implemented and tested via real agent runs:
 - CEO agent delegates to Researcher agent (sync and async)
 - Researcher writes reports to workspace, exits via guardrail-checked write
-- Guardrail blocks screen proposed actions
+- System-level input safety checks (prompt injection detection) before flow execution
+- System-level output safety checks (scope creep, credential exfiltration detection) before LLM block transitions
+- Custom guardrail blocks screen proposed actions
 - Memory store/search across agents
 - Scheduler daemon + self-scheduling via `schedule_agent` tool
 - Mailbox messaging between agents

@@ -13,6 +13,10 @@ __pycache__/
 # --- Mutable runtime data (bind-mounted at runtime, not baked into the image) ---
 data/
 
+# --- Instance-specific config (must be created in data/config/ at runtime) ---
+# config/discord.yaml is a template only; never bake a live discord config into the image.
+config/discord.yaml
+
 # --- Development artefacts ---
 .pytest_cache/
 *.egg-info/

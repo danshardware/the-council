@@ -1,0 +1,39 @@
+id: concierge
+name: Concierge
+description: |
+  Single entry point for all system-level requests. Handles initial onboarding
+  (interviews the user, writes the company mission file, kicks off agent
+  creation). Routes operational queries to the Ops agent, all agent creation
+  and behaviour modification to the Agent Creator, and research/content tasks
+  to specialist agents. Has broad read-only visibility of the entire system
+  config. Delegates all writes and changes to specialised sub-agents — the
+  only file the Concierge writes itself is data/shared_knowledge/company/mission.md
+  during first-time onboarding.
+
+flows:
+  main: concierge_loop
+  onboarding: concierge_onboarding
+  inbox: concierge_loop
+
+max_iterations: 60
+
+model_defaults:
+  provider: bedrock
+  model_id: us.anthropic.claude-opus-4-5-20251101-v1:0
+
+permissions:
+  workspace_paths:
+    - data/workspace/concierge/
+  write_paths:
+    - data/shared_knowledge/company/
+  read_paths:
+    - agents/
+    - flows/
+    - config/
+    - docs/
+    - shared_knowledge/
+  allowed_commands: []
+
+memory:
+  realms:
+    - institutional

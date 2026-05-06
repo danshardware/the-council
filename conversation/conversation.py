@@ -212,6 +212,32 @@ class Message:
 # Conversation-slicing helpers (used by call_model)
 # ---------------------------------------------------------------------------
 
+# Bedrock requires toolConfig to be present whenever the conversation contains
+# toolUse or toolResult blocks.  When a block has no real tools we still need
+# to satisfy this constraint.  We include a sentinel no-op tool so the API
+# call succeeds; the model will not call it because the system prompt never
+# mentions it.
+_SENTINEL_TOOL_CONFIG = {
+    "tools": [{
+        "toolSpec": {
+            "name": "_noop",
+            "description": "Internal placeholder tool. Do not call this tool.",
+            "inputSchema": {
+                "json": {"type": "object", "properties": {}, "required": []},
+            },
+        }
+    }]
+}
+
+
+def _conversation_has_tool_blocks(conversation: list[dict]) -> bool:
+    """Return True if any message dict contains a toolUse or toolResult block."""
+    for msg in conversation:
+        for item in msg.get("content", []):
+            if "toolUse" in item or "toolResult" in item:
+                return True
+    return False
+
 def _find_tool_free_boundary(turns: list, gap: int = 4) -> int:
     """Return the first index of a run of `gap` consecutive turns with no
     toolUse or toolResult content.  Falls back to 0 (keep everything) when
@@ -419,14 +445,19 @@ class Conversation:
         else:
             conversation = [m.to_dict() for m in messages]
         
-        # Prepare tool configuration
-        tool_config = {
-            "tools": [
-                {
-                    "toolSpec": tool.tool_spec
-                } for tool in self.tools.values()
-            ]
-        }
+        # Prepare tool configuration.
+        # If this block has real tools, use them.  If it has none but the
+        # conversation already contains toolUse/toolResult blocks, Bedrock
+        # still requires toolConfig to be present — supply the sentinel so
+        # the call succeeds without stripping valuable conversation history.
+        if self.tools:
+            effective_tool_config = {
+                "tools": [{"toolSpec": tool.tool_spec} for tool in self.tools.values()]
+            }
+        elif _conversation_has_tool_blocks(conversation):
+            effective_tool_config = _SENTINEL_TOOL_CONFIG
+        else:
+            effective_tool_config = None
 
         # Make the API call
         try:
@@ -436,7 +467,7 @@ class Conversation:
                 messages=conversation,
                 system=self.system_prompts,
                 inferenceConfig=self.inference_config,
-                **({"toolConfig": tool_config} if self.tools else {}),
+                **({"toolConfig": effective_tool_config} if effective_tool_config else {}),
                 additionalModelRequestFields={
                     **self.additional_model_fields,
                 }

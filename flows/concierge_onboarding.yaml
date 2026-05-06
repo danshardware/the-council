@@ -1,0 +1,303 @@
+id: concierge_onboarding
+max_iterations: 30
+start: check_mission
+
+on_error:
+  max_iterations:
+    start: onboard_done
+  unhandled:
+    start: onboard_done
+
+blocks:
+
+  # ── Step 1: Check whether onboarding has already been done ──────────────────
+
+  check_mission:
+    type: llm
+    system_prompt: |
+      You are the Concierge, running the first-time onboarding flow.
+
+      Check whether data/shared_knowledge/company/mission.md already exists.
+      Use read_file to attempt to read it.
+
+      - If it exists and has content → respond with action: already_done.
+      - If it does not exist (error or empty) → respond with action: interview.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "result of checking for mission.md"
+      action: read_file | already_done | interview
+      action_input:
+        # for read_file: path ("data/shared_knowledge/company/mission.md")
+      ```
+    tools:
+      - read_file
+    transitions:
+      read_file: check_read_block
+      already_done: already_done
+      interview: interview
+      default: interview
+
+  check_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: check_mission
+
+  # ── Already onboarded ────────────────────────────────────────────────────────
+
+  already_done:
+    type: llm
+    system_prompt: |
+      Onboarding has already been completed — data/shared_knowledge/company/mission.md
+      exists. Let the human know and offer to:
+      1. Show them the existing mission file.
+      2. Update it (they should describe what has changed).
+      3. Proceed with a new request.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "onboarding already done, offering options"
+      action: ask_human | done
+      action_input:
+        # for ask_human: message (what you're offering)
+      ```
+    transitions:
+      ask_human: already_done_send
+      done: END
+      default: END
+
+  already_done_send:
+    type: human_reply
+    transitions:
+      replied: already_done
+      default: already_done_ask
+
+  already_done_ask:
+    type: human_input
+    prompt: "Onboarding is already complete. What would you like to do?"
+    transitions:
+      approved: END
+      rejected: END
+      default: END
+
+  # ── Step 2: Interview ────────────────────────────────────────────────────────
+
+  interview:
+    type: llm
+    system_prompt: |
+      You are the Concierge. Welcome the human and begin the onboarding interview.
+
+      Gather all of the following information in a friendly, conversational way.
+      Ask one or two questions at a time — don't overwhelm the human with a wall
+      of questions.
+
+      Information to gather:
+      1. **Mission** — What does this organisation (or project) do? What is its
+         purpose or goal?
+      2. **Team** — Who will be using The Council? How many people? What roles?
+      3. **Problems to solve** — What kinds of tasks should the Council automate
+         or assist with? (e.g. research, content, ops monitoring, scheduling)
+      4. **Expected outputs** — What should a typical Council output look like?
+         (reports, messages, files, summaries, decisions?)
+      5. **Existing infrastructure** — Are there any tools, APIs, or data sources
+         the Council should be aware of? (Discord, Slack, databases, etc.)
+
+      When you have gathered enough to write a clear mission file, respond with
+      action: ask_human to show a draft summary and ask for confirmation before
+      writing.
+
+      Otherwise, respond with action: ask_human to continue the interview.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what you have gathered and what is still missing"
+      action: ask_human | write_mission
+      action_input:
+        # for ask_human: message (your next question(s) or draft summary)
+        # for write_mission: (no input — proceed when confirmed)
+      ```
+    transitions:
+      ask_human: interview_send
+      write_mission: write_mission
+      default: interview
+
+  interview_send:
+    type: human_reply
+    transitions:
+      replied: interview
+      default: interview_ask
+
+  interview_ask:
+    type: human_input
+    prompt: "Concierge needs your input for onboarding."
+    transitions:
+      approved: interview
+      rejected: interview
+      default: interview
+
+  # ── Step 3: Write mission file ───────────────────────────────────────────────
+
+  write_mission:
+    type: llm
+    system_prompt: |
+      You are the Concierge. The human has confirmed the mission summary.
+      Now write it to data/shared_knowledge/company/mission.md.
+
+      The mission file must be a well-structured Markdown document containing:
+      - # Mission (one paragraph)
+      - ## Team (bullet list of roles)
+      - ## Problems to Solve (bullet list)
+      - ## Expected Outputs (bullet list)
+      - ## Infrastructure & Tools (bullet list, can be "None identified yet")
+
+      Use write_file to save it. Then respond with action: agent_setup.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "content of mission file and path to write"
+      action: write_file | agent_setup
+      action_input:
+        # for write_file: path ("data/shared_knowledge/company/mission.md"), content
+      ```
+    tools:
+      - write_file
+    transitions:
+      write_file: mission_write_block
+      agent_setup: agent_setup
+      default: agent_setup
+
+  mission_write_block:
+    type: tool_call
+    tool: write_file
+    transitions:
+      default: write_mission
+
+  # ── Step 4: Agent setup ──────────────────────────────────────────────────────
+
+  agent_setup:
+    type: llm
+    system_prompt: |
+      The mission file has been written to data/shared_knowledge/company/mission.md.
+
+      Now ask the human which specialised agents they want to set up.
+      Suggest options based on their stated problems (e.g. researcher, marketing,
+      ops, campaign) and offer to create custom agents for specific needs.
+
+      For each agreed agent, you will delegate to the agent_creator via
+      spawn_agent("agent_creator", description).
+
+      If the human says "none" or "later", proceed to action: channel_setup.
+
+      If they specify agents → respond with action: ask_human to confirm the list
+      before spawning.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what agents to suggest and why"
+      action: ask_human | spawn_agent | channel_setup
+      action_input:
+        # for ask_human: message (your agent suggestions + confirmation request)
+        # for spawn_agent: agent_id ("agent_creator"), instruction
+      ```
+    tools:
+      - spawn_agent
+    transitions:
+      ask_human: agent_setup_send
+      spawn_agent: agent_setup_spawn_block
+      channel_setup: channel_setup
+      default: channel_setup
+
+  agent_setup_send:
+    type: human_reply
+    transitions:
+      replied: agent_setup
+      default: agent_setup_ask
+
+  agent_setup_ask:
+    type: human_input
+    prompt: "Which agents would you like to set up?"
+    transitions:
+      approved: agent_setup
+      rejected: channel_setup
+      default: channel_setup
+
+  agent_setup_spawn_block:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: agent_setup
+
+  # ── Step 5: Channel setup guidance ──────────────────────────────────────────
+
+  channel_setup:
+    type: llm
+    system_prompt: |
+      The core agents are configured. Now walk the human through channel setup.
+
+      Read config/discord.yaml to check if Discord is configured.
+
+      Let the human know:
+      - Which channels are available and roughly configured.
+      - What they still need to do to activate each channel
+        (e.g. set DISCORD_TOKEN env var, invite the bot to a server).
+      - That additional channels (Slack, Teams, web chat) are planned but
+        not yet implemented.
+
+      Respond with action: ask_human if they have questions, otherwise action: done.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "channel status and what guidance to give"
+      action: read_file | ask_human | done
+      action_input:
+        # for read_file: path
+        # for ask_human: message
+      ```
+    tools:
+      - read_file
+    transitions:
+      read_file: channel_read_block
+      ask_human: channel_ask
+      done: onboard_done
+      default: onboard_done
+
+  channel_read_block:
+    type: tool_call
+    tool: read_file
+    transitions:
+      default: channel_setup
+
+  channel_ask:
+    type: human_input
+    prompt: "Do you have any questions about channel setup?"
+    transitions:
+      approved: channel_setup
+      rejected: onboard_done
+      default: onboard_done
+
+  # ── Step 6: Done ─────────────────────────────────────────────────────────────
+
+  onboard_done:
+    type: llm
+    system_prompt: |
+      Onboarding is complete. Write a warm, clear summary including:
+
+      - What was set up (mission file written to data/shared_knowledge/company/mission.md).
+      - Which agents were created (if any).
+      - Channel status.
+      - How to invoke agents going forward:
+          uv run run.py --agent <id> --prompt "your task"
+      - How to reach the Concierge for future system requests.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "everything is set up"
+      action: done
+      action_input:
+        summary: |
+          <your onboarding completion message>
+      ```
+    transitions:
+      done: END
+      default: END

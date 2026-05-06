@@ -60,6 +60,49 @@ def init_data_dirs() -> None:
     for directory in _REQUIRED_DIRS:
         directory.mkdir(parents=True, exist_ok=True)
 
+    _ensure_data_git_repo()
+
+
+def _ensure_data_git_repo() -> None:
+    """Initialise DATA_DIR as a git repository if it is not already one.
+
+    The ops agent commits config changes via `git -C data/ ...`.  If the data
+    volume has never been initialised as a repo (e.g. fresh install), those
+    commits silently fail.  This ensures the repo always exists before any
+    agent runs.
+    """
+    import subprocess
+
+    git_dir = DATA_DIR / ".git"
+    if git_dir.is_dir():
+        return  # already a repo
+
+    try:
+        subprocess.run(
+            ["git", "init", str(DATA_DIR)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(DATA_DIR), "commit", "--allow-empty",
+             "-m", "chore: initialise data repository"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**__import__("os").environ,
+                 "GIT_AUTHOR_NAME": "Council",
+                 "GIT_AUTHOR_EMAIL": "council@local",
+                 "GIT_COMMITTER_NAME": "Council",
+                 "GIT_COMMITTER_EMAIL": "council@local"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Non-fatal — log a warning but don't prevent startup
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not initialise git repo in data directory %s: %s", DATA_DIR, exc
+        )
+
 
 # ---------------------------------------------------------------------------
 # Override-aware file resolution

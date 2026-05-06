@@ -22,6 +22,10 @@ class ChannelAdapter(ABC):
         """Post plain text. ``destination`` is a channel or thread object."""
 
     @abstractmethod
+    async def send_thread_message(self, destination, content: str) -> None:
+        """Post plain text to a thread, chunking at 2000 chars if needed."""
+
+    @abstractmethod
     async def send_embed(
         self,
         destination,
@@ -57,6 +61,18 @@ class DiscordAdapter(ChannelAdapter):
     async def send_message(self, destination, content: str) -> None:
         await destination.send(content)
 
+    async def send_thread_message(self, destination, content: str) -> None:
+        """Send plain text to a thread, splitting at Discord's 2000-char message limit."""
+        _LIMIT = 2000
+        while len(content) > _LIMIT:
+            split_at = content.rfind("\n", 0, _LIMIT)
+            if split_at == -1:
+                split_at = _LIMIT
+            await destination.send(content[:split_at])
+            content = content[split_at:].lstrip("\n")
+        if content:
+            await destination.send(content)
+
     async def send_embed(
         self,
         destination,
@@ -69,13 +85,27 @@ class DiscordAdapter(ChannelAdapter):
         color = int(d_cfg.get("embed_color", 0x5865F2))
         name = d_cfg.get("embed_name", agent_config.get("name", "Agent"))
         emoji = d_cfg.get("embed_emoji", "🤖")
-        # Discord embed description hard limit is 4096 characters
-        if len(description) > 4096:
-            description = description[:4093] + "…"
-        embed = _discord.Embed(title=title, description=description, color=color)
-        embed.set_author(name=f"{emoji}  {name}")
-        msg = await destination.send(embed=embed)
-        return msg.id
+
+        # Split into ≤4096-char chunks so long agent messages aren't silently truncated.
+        _LIMIT = 4096
+        chunks = []
+        while len(description) > _LIMIT:
+            # Try to split on a newline near the limit so we don't break mid-word.
+            split_at = description.rfind("\n", 0, _LIMIT)
+            if split_at == -1:
+                split_at = _LIMIT
+            chunks.append(description[:split_at])
+            description = description[split_at:].lstrip("\n")
+        chunks.append(description)
+
+        last_id = 0
+        for i, chunk in enumerate(chunks):
+            chunk_title = title if i == 0 else f"{title} (cont.)"
+            embed = _discord.Embed(title=chunk_title, description=chunk, color=color)
+            embed.set_author(name=f"{emoji}  {name}")
+            msg = await destination.send(embed=embed)
+            last_id = msg.id
+        return last_id
 
     async def add_reaction(self, message, emoji: str) -> None:
         try:

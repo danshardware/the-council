@@ -1,5 +1,7 @@
 # The Council
 
+**Important**: This file describes the end state of the Council as a deployable, production system. The current phase of operation is a locally run container that makes development quicker to iterate on. Be aware that we will eventually move to this type of architecture, but right now it's a single container.
+
 ## Project description
 
 The council is an agent swarm that is dedicated to a single enterprise.

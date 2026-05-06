@@ -15,6 +15,7 @@ Bot-initiated posts (alerts, briefings) go directly to the target channel — no
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -42,6 +43,66 @@ def _get_retry_scheduler():
         _retry_scheduler = BackgroundScheduler()
         _retry_scheduler.start()
     return _retry_scheduler
+
+
+# ---------------------------------------------------------------------------
+# Pending-session persistence — survives container restarts
+# ---------------------------------------------------------------------------
+
+def _pending_file() -> Path:
+    from engine import paths
+    return paths.DATA_DIR / "pending_sessions.json"
+
+
+def _save_pending_sessions() -> None:
+    """Persist the serialisable portion of _pending_sessions to disk."""
+    data: dict[str, dict] = {}
+    for tid, p in _pending_sessions.items():
+        try:
+            data[str(tid)] = {
+                "channel_context": p["channel_context"],
+                "agent_id": p["agent_id"],
+                "session_id": p["session_id"],
+                "agent_cfg": p["agent_cfg"],
+            }
+        except Exception:
+            pass
+    try:
+        f = _pending_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, indent=2, default=str))
+    except Exception as exc:
+        _log.warning("Could not save pending sessions: %s", exc)
+
+
+def _load_pending_sessions(adapter, loop: asyncio.AbstractEventLoop) -> None:
+    """Reload persisted pending sessions and re-attach runtime objects."""
+    f = _pending_file()
+    if not f.exists():
+        return
+    try:
+        data: dict = json.loads(f.read_text())
+    except Exception as exc:
+        _log.warning("Could not load pending sessions: %s", exc)
+        return
+    for tid_str, p in data.items():
+        try:
+            tid = int(tid_str)
+            _pending_sessions[tid] = {
+                "channel_context": p["channel_context"],
+                "agent_id": p["agent_id"],
+                "session_id": p["session_id"],
+                "agent_cfg": p["agent_cfg"],
+                "adapter": adapter,
+                "loop": loop,
+                "original_message": None,  # can't restore after restart
+            }
+        except Exception as exc:
+            _log.warning("Could not restore pending session %s: %s", tid_str, exc)
+    if data:
+        _console.print(
+            f"[yellow][Discord][/yellow] Restored {len(data)} pending session(s) from disk"
+        )
 
 
 def build_discord_client(config: dict, agents_dir: str = "agents"):
@@ -74,6 +135,7 @@ def build_discord_client(config: dict, agents_dir: str = "agents"):
             f"[bold]{client.user}[/bold] — listening on "
             f"{len(config.get('guilds', []))} guild(s)"
         )
+        _load_pending_sessions(adapter, asyncio.get_running_loop())
 
     @client.event
     async def on_message(message: discord.Message) -> None:
@@ -221,6 +283,7 @@ async def _handle_channel_message(
             "agent_cfg": agent_cfg,
             "original_message": message,
         }
+        _save_pending_sessions()
         # Schedule retry pings inside business hours
         timezone = config.get("timezone", "UTC")
         _schedule_retry(
@@ -393,6 +456,7 @@ def _discord_retry_job(
     thread_id_int = ctx.get("thread_id")
     if thread_id_int is not None:
         _pending_sessions.pop(int(thread_id_int), None)
+    _save_pending_sessions()
     ctx["pending_checkpoint"] = None
     ctx["retry_count"] = 0
     ctx["_already_sent"] = False  # reset so the resumed session can post its response
@@ -469,6 +533,7 @@ async def _resume_from_human_reply(reply, pending: dict) -> None:
     # Cancel retry pings and deregister session
     _cancel_retry(session_id)
     _pending_sessions.pop(reply.channel.id, None)
+    _save_pending_sessions()
 
     if not ctx.get("pending_checkpoint"):
         return
@@ -515,7 +580,8 @@ async def _resume_from_human_reply(reply, pending: dict) -> None:
 
     response_text = _extract_final_response(shared)
     if response_text and not ctx.get("_already_sent"):
-        await adapter.send_embed(reply.channel, "Response", response_text, agent_cfg)
+        # Inside a thread — plain text, no embed needed
+        await adapter.send_thread_message(reply.channel, response_text)
 
     if shared.get("suspended"):
         # Agent asked a follow-up question — re-register for another round
@@ -528,6 +594,7 @@ async def _resume_from_human_reply(reply, pending: dict) -> None:
             "agent_cfg": agent_cfg,
             "original_message": original_message,
         }
+        _save_pending_sessions()
         timezone = ctx.get("_timezone", "UTC")
         _schedule_retry(
             channel_context=ctx,

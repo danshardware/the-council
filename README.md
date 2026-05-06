@@ -6,6 +6,8 @@ A local multi-agent system. Multiple AI agents (backed by AWS Bedrock) run concu
 
 ## Quick start
 
+> **Fresh install?** See [docs/getting-started.md](docs/getting-started.md) for the full step-by-step guide.
+
 ```bash
 # Install dependencies
 uv sync
@@ -90,7 +92,7 @@ data/
 ├── agents/          # override built-in agent YAMLs (optional)
 ├── flows/           # override built-in flow YAMLs (optional)
 ├── config/
-│   ├── discord.yaml         # required for Discord gateway
+│   ├── discord.yaml         # required for Discord gateway (copy from config/discord.yaml.template)
 │   └── schedules.yaml       # runtime schedules (copy from config/schedules.yaml.template)
 ├── shared_knowledge/        # company context files injected into agent prompts
 ├── logs/            # JSONL session traces (auto-created)

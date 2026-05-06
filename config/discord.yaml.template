@@ -1,0 +1,42 @@
+# Council Discord Configuration — TEMPLATE
+#
+# This file is a reference template. It is NOT loaded by the runtime.
+# To configure Discord, copy this file to:
+#
+#   data/config/discord.yaml
+#
+# and replace all "___" values with your real IDs.
+# Alternatively, ask the Ops agent to create it for you:
+#
+#   uv run run.py --agent ops --prompt "Configure Discord: guild_id=..., channel_id=..., channel_name=..., agent=ceo"
+#
+# IMPORTANT: Never put the bot token here.
+# Add DISCORD_BOT_TOKEN=your-token to your .env file.
+#
+# Bot permissions required in the Discord Developer Portal:
+#   - Read Messages / View Channels
+#   - Send Messages
+#   - Create Public Threads
+#   - Manage Messages (for clearing reactions)
+#   - Add Reactions
+#   - Read Message History
+#
+# Privileged Gateway Intents (must be enabled in Developer Portal → Bot → Privileged Intents):
+#   - Message Content Intent
+
+# IANA timezone name for business-hours retry window (human-input retries)
+timezone: America/New_York
+
+guilds:
+  - guild_id: "___"
+    name: "My Company"
+    # Channel → agent mappings.
+    # Right-click a channel → Copy Channel ID (enable Developer Mode first:
+    #   User Settings → Advanced → Developer Mode).
+    channels:
+      - channel_id: "___"
+        name: "ceo-chat"
+        agent: ceo
+    # If true, messages in unmapped channels are sent to Nova Lite to pick
+    # the best agent. If false, a clarification message is posted instead.
+    routing_fallback_llm: true

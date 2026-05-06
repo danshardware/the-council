@@ -21,6 +21,11 @@ class ToolContext:
     allowed_commands: list[str] = field(default_factory=list)
     fetched_cache: set[str] = field(default_factory=set)
     todo_list: list = field(default_factory=list)
+    # Channel context forwarded from shared state so sub-agents spawned via
+    # spawn_agent() can post to Discord and suspend correctly.
+    channel_context: dict | None = None
+    _channel_adapter: object | None = None
+    _discord_loop: object | None = None
 
 
 _REGISTRY: dict[str, Callable] = {}

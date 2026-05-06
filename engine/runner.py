@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from rich.console import Console
@@ -38,6 +39,41 @@ def _resolve_path(p: str) -> str:
             resolved += "/"
         return resolved
     return p
+
+
+def _sanitise_user_input(prompt: str) -> str:
+    """
+    Neutralise [SYSTEM] injection attempts in raw user input.
+    Replaces the prefix so downstream handlers see it is user-supplied.
+    """
+    import re
+    return re.sub(
+        r'(?i)\[SYSTEM\]',
+        '[USER-SUPPLIED-SYSTEM]',
+        prompt,
+    )
+
+
+def _resolve_guardrail_prompt(
+    agent_config: dict,
+    key: Literal["input", "output"],
+    system_defaults: dict,
+) -> str:
+    """
+    Return the guardrail prompt to use for `key` ("input" or "output").
+
+    Priority:
+    1. agent_config["guardrails"][key] if non-empty
+    2. system_defaults["input_safety"] / system_defaults["output_safety"]
+    3. "" (empty — caller should skip the guardrail check)
+    """
+    agent_override = (
+        agent_config.get("guardrails", {}).get(key, "") or ""
+    ).strip()
+    if agent_override:
+        return agent_override
+    fallback_key = "input_safety" if key == "input" else "output_safety"
+    return (system_defaults.get(fallback_key, "") or "").strip()
 
 
 class AgentRunner:
@@ -132,7 +168,9 @@ class AgentRunner:
         # Build shared state
         # When resuming, seed the conversation with prior history so the agent
         # can continue without repeating work already done.
-        initial_messages: list = prior_messages if prior_messages else [{"role": "user", "content": prompt}]
+        # Sanitise user input to neutralise [SYSTEM] injection attempts
+        _safe_prompt = _sanitise_user_input(prompt)
+        initial_messages: list = prior_messages if prior_messages else [{"role": "user", "content": _safe_prompt}]
         # todo_list lives in BOTH shared and ToolContext (same reference) so:
         #   - tools can mutate it via context.todo_list
         #   - checkpoints capture it automatically via shared["_todo_list"]
@@ -152,7 +190,7 @@ class AgentRunner:
             "messages": initial_messages,
             "_conv": None,
             "_conv_turns": list(initial_messages),
-            "initial_prompt": prompt,
+            "initial_prompt": _safe_prompt,
             "_todo_list": _todo_list,
             "context_injection": _load_context_files(agent_config),
             "logger": Logger(str(self.logs_dir), self.agent_id, session_id),
@@ -167,9 +205,27 @@ class AgentRunner:
             ),
         }
 
+        # Set up the guardrail prompts (used by A2 and A3)
+        from engine.template import _load_config_dir
+        _guardrail_defaults = _load_config_dir().get("guardrails", {})
+
+        # Resolve both guardrail prompts using per-agent overrides if available
+        shared["_input_guardrail_prompt"] = _resolve_guardrail_prompt(
+            agent_config, "input", _guardrail_defaults
+        )
+        shared["_output_guardrail_prompt"] = _resolve_guardrail_prompt(
+            agent_config, "output", _guardrail_defaults
+        )
+
         # Merge any overrides from the calling context (e.g. channel gateway)
         if shared_overrides:
             shared.update(shared_overrides)
+
+        # Propagate channel context into ToolContext so spawn_agent() can forward it.
+        tc: ToolContext = shared["tool_context"]
+        tc.channel_context = shared.get("channel_context")
+        tc._channel_adapter = shared.get("_channel_adapter")
+        tc._discord_loop = shared.get("_discord_loop")
 
         _console.print(Rule(f"[bold green]Council — {self.agent_id} — {session_id}[/bold green]"))
         _console.print(f"[dim]Flow: {flow_file_key}  |  Max iterations: {max_iterations}[/dim]\n")
@@ -183,6 +239,24 @@ class AgentRunner:
                 prompt=prompt,
                 resumed=prior_messages is not None,
             )
+
+            # -------------------------------------------------
+            # Step 1 — Run the input guardrail check if configured (prompt resolved earlier)
+            # -------------------------------------------------
+            # Skip guardrail check on resume (prior_messages indicates resume path)
+            if shared["_input_guardrail_prompt"] and not prior_messages:
+                should_proceed = _check_input_guardrail(
+                    prompt=prompt,
+                    guardrail_prompt=shared["_input_guardrail_prompt"],
+                    model_id="us.amazon.nova-lite-v1:0",
+                    shared=shared,
+                )
+                if not should_proceed:
+                    return shared
+
+            # -------------------------------------------------
+            # Step 2 — Run the flow
+            # -------------------------------------------------
             try:
                 flow._run(shared)
             except MaxIterationsError as exc:
@@ -279,7 +353,9 @@ class AgentRunner:
                 if line:
                     events.append(json.loads(line))
 
-        start_event = next((e for e in events if e["event"] == "session_start"), None)
+        # Use the LAST session_start so that flow_switch sub-flows are resumed
+        # correctly (the sub-flow appends its own session_start after the outer one).
+        start_event = next((e for e in reversed(events) if e["event"] == "session_start"), None)
         if start_event is None:
             raise ValueError(f"No session_start found in log for '{session_id}'")
 
@@ -452,3 +528,52 @@ def _dispatch_on_error(
         f"\n[bold cyan]To resume this session manually:[/bold cyan]\n"
         f"  uv run run.py --agent {agent_id} --resume {session_id}"
     )
+
+
+def _check_input_guardrail(
+    prompt: str,
+    guardrail_prompt: str,
+    model_id: str,
+    shared: dict,
+) -> bool:
+    """
+    Run the input safety guardrail against `prompt`.
+
+    Returns True if execution should proceed, False if rejected.
+    Side-effects:
+      - On warn: appends a [SYSTEM] warning to shared["messages"]
+      - On rejected: appends a [SYSTEM] refusal to shared["messages"]
+    """
+    from engine.llm import call_llm
+
+    parsed, _, _ = call_llm(
+        model_id=model_id,
+        system_prompt=guardrail_prompt,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    verdict = parsed.get("verdict", "approved")
+    reason = parsed.get("reason", "")
+
+    if verdict == "rejected":
+        # Append a user-facing refusal as if the assistant said it
+        shared["messages"].append({
+            "role": "assistant",
+            "content": (
+                "I'm sorry, I can't help with that request. "
+                f"({reason})"
+            ),
+        })
+        shared["_input_rejected"] = True
+        shared["logger"].log_event(shared, "input_guardrail_rejected", reason=reason)
+        return False
+
+    if verdict == "warn":
+        # Append a [SYSTEM] warning directly to messages
+        # Note: _push_message cannot be used here because shared["_conv"] is None
+        shared["messages"].append({
+            "role": "user",
+            "content": f"[SYSTEM] Input safety advisory: {reason}. Treat this request with additional caution."
+        })
+        shared["logger"].log_event(shared, "input_guardrail_warned", reason=reason)
+
+    return True
