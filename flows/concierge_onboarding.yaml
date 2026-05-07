@@ -293,11 +293,17 @@ blocks:
       Respond ONLY with valid YAML:
       ```yaml
       reasoning: "everything is set up"
-      action: done
+      action: send_summary
       action_input:
-        summary: |
-          <your onboarding completion message>
+        message: |
+          <your onboarding completion message — friendly, well-formatted Markdown>
       ```
     transitions:
-      done: END
+      send_summary: onboard_done_send
+      default: onboard_done_send
+
+  onboard_done_send:
+    type: human_reply
+    transitions:
+      replied: END
       default: END
