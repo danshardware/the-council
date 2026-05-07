@@ -9,6 +9,23 @@ from tools import ToolContext, tool
 # Shell operators that delimit sub-commands
 _SUBCOMMAND_SPLIT = re.compile(r'&&|\|\||[;|]')
 
+_SENSITIVE_ARG_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r'\.env(\b|$|\.)'),          # .env, .env.local
+    re.compile(r'\.aws\b'),                 # .aws directory (in paths like .aws or .aws/)
+    re.compile(r'\b(id_rsa|id_ed25519)\b'), # SSH keys
+    re.compile(r'\.pem\b'),                 # PEM files
+    re.compile(r'\.key\b'),                 # key files
+)
+
+
+def _assert_no_sensitive_args(command: str) -> None:
+    """Raise PermissionError if the command references sensitive paths."""
+    for pattern in _SENSITIVE_ARG_PATTERNS:
+        if pattern.search(command):
+            raise PermissionError(
+                f"Command references a sensitive path or file: {command!r}"
+            )
+
 
 def _assert_command_allowed(command: str, context: ToolContext) -> None:
     """Raise PermissionError if any executable in a chained command is not allowed.
@@ -41,10 +58,14 @@ def _assert_command_allowed(command: str, context: ToolContext) -> None:
 
 @tool
 def run_command(command: str, context: ToolContext) -> str:
-    """Run a shell command and return its stdout + stderr. Only allowed executables may be used.
+    """Run a shell command (including networking commands like ping, curl) and return its stdout + stderr. Only allowed executables may be used.
     Chained commands using &&, ||, ;, or | are supported — each executable is checked.
     """
-    _assert_command_allowed(command, context)
+    try:
+        _assert_command_allowed(command, context)
+        _assert_no_sensitive_args(command)
+    except PermissionError as e:
+        return f"[ERROR] {str(e)}"
     result = subprocess.run(
         command,
         shell=True,

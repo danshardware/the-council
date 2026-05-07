@@ -31,7 +31,10 @@ permissions:
     - flows/
     - config/
     - docs/
-    - shared_knowledge/
+    - data/shared_knowledge/
+    - data/logs/
+    - data/workspace/
+    - data/config/
   allowed_commands: []
 
 memory:

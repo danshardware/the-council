@@ -50,9 +50,13 @@ blocks:
         # for draft: (no action_input needed — proceed when scope is clear)
       ```
     tools:
+      - list_tools
+      - search_tools
       - list_files
       - read_file
     transitions:
+      list_tools: gather_list_tools_block
+      search_tools: gather_search_tools_block
       list_files: gather_list_block
       read_file: gather_read_block
       ask_human: gather_ask_human
@@ -77,6 +81,20 @@ blocks:
     transitions:
       approved: gather
       rejected: gather
+      default: gather
+
+  gather_list_tools_block:
+    type: tool_call
+    tool: list_tools
+    input_keys: []
+    transitions:
+      default: gather
+
+  gather_search_tools_block:
+    type: tool_call
+    tool: search_tools
+    input_keys: [query]
+    transitions:
       default: gather
 
   # ── Phase 2: Draft agent and flow files ─────────────────────────────────────

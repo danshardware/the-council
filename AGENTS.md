@@ -333,7 +333,7 @@ permissions:
   write_paths:            # stable writable dirs (NOT session-scoped)
     - data/outputs/analyst/
   read_paths:             # read-only source dirs
-    - shared_knowledge/
+    - data/shared_knowledge/
   allowed_commands: []    # executables run_command may use; empty = none
 
 memory:
@@ -361,6 +361,29 @@ context_files:            # injected verbatim into every LLM block system prompt
 - `workspace_paths` are session-scoped: `<path>/<session_id>/` is auto-created so concurrent runs never collide
 - `write_paths` are stable directories pre-created at startup
 - File tools enforce these paths — any access outside them raises `PermissionError`
+
+### Context Files
+
+`context_files` inject documentation directly into every LLM block's system prompt. This is useful for:
+- **System architecture context**: e.g., `docs/project-onboarding.md` for agents that need to understand the system's structure
+- **Coding conventions and patterns**: e.g., `docs/how-to-create-agents.md` for agents that create other agents
+- **Agent-specific guidance**: instructions that are always relevant to this agent's role
+
+Example:
+```yaml
+context_files:
+  - glob: "docs/project-onboarding.md"
+    tag: "system_overview"   # content wrapped in <system_overview>...</system_overview>
+  - glob: "docs/how-to-create-agents.md"
+    tag: "agent_creation_guide"
+```
+
+The `tag` is optional and wraps the content in XML-like tags in the prompt. Multiple `glob` patterns can be specified. Content is injected verbatim (no processing).
+
+**When to use:**
+- The Agent Creator has `project-onboarding.md` in context_files to know the stack and directory structure when designing new agents.
+- Use context_files for information that is always relevant to the agent's work, regardless of the specific task.
+- Don't use context_files for task-specific information — use the conversation or memory instead.
 
 ---
 

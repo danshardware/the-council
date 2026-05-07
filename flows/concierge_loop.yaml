@@ -134,6 +134,8 @@ blocks:
     tools:
       - read_file
       - list_files
+      - list_tools
+      - search_tools
     transitions:
       onboard: onboard_redirect
       delegate_ops: delegate_ops

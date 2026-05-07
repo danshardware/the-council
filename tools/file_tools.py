@@ -9,6 +9,34 @@ import yaml as _yaml
 from tools import ToolContext, tool
 
 
+# Set of glob patterns matched against the filename (not the full path).
+# If matched, access is denied regardless of allowed_paths.
+_SENSITIVE_PATTERNS: frozenset[str] = frozenset({
+    ".env",
+    ".env.*",          # .env.local, .env.production, etc.
+    "*.env",           # myapp.env, whatever.env
+    "*.env.*",         # something.env.local, something.env.production
+    "*.key",
+    "*.pem",
+    "*.p12",
+    "*.pfx",
+    "*.crt",           # certificates — may contain private keys
+    "*.secret",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "*.kdbx",          # KeePass
+    "credentials",     # AWS credentials file
+    "config",          # AWS config file (catches ~/.aws/config)
+})
+
+
+def _is_sensitive_file(path: Path) -> bool:
+    """Return True if the filename matches a known-sensitive pattern."""
+    name = path.name
+    return any(fnmatch.fnmatch(name, pattern) for pattern in _SENSITIVE_PATTERNS)
+
+
 def _is_private_path(path: Path) -> bool:
     """Return True if any segment of the path starts with '_' or '.' (private/system paths)."""
     return any(part.startswith("_") or part.startswith(".") for part in path.parts)
@@ -24,6 +52,11 @@ def _assert_path_allowed(path: str, context: ToolContext) -> Path:
             if _is_private_path(rel):
                 raise PermissionError(
                     f"Path '{path}' refers to a private or system path (segments starting with '_' or '.' are reserved)."
+                )
+            # Check if the file is sensitive (e.g., .env, *.key, etc.)
+            if _is_sensitive_file(resolved):
+                raise PermissionError(
+                    f"Path '{path}' refers to a sensitive file that agents cannot access."
                 )
             return resolved
     raise PermissionError(f"Path '{path}' is outside allowed paths: {context.allowed_paths}")

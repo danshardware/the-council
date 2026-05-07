@@ -33,7 +33,7 @@ permissions:
   write_paths:
     - data/outputs/analyst/          # stable writable directories (NOT session-scoped)
   read_paths:
-    - shared_knowledge/              # read-only source directories (NOT session-scoped)
+    - data/shared_knowledge/              # read-only source directories (NOT session-scoped)
   allowed_commands: []               # executables run_command may use; empty = no commands
 
 memory:
@@ -42,7 +42,7 @@ memory:
     - institutional                  # valid values: knowledge_base | institutional | sop
 
 context_files:                       # files injected into every LLM system prompt
-  - glob: "shared_knowledge/company/**/*.md"
+  - glob: "data/shared_knowledge/company/**/*.md"
     tag: "company_info"              # becomes <company_info>…</company_info> in system prompt
 ```
 
@@ -347,4 +347,4 @@ For `send_message` to work, the target agent needs an `inbox:` flow defined in i
 
 ## Shared knowledge
 
-Files placed under `shared_knowledge/` can be auto-injected into an agent's system prompts via `context_files:` in the agent YAML. They are not searched — they are prepended verbatim (wrapped in XML tags) to every LLM block call in the session. Keep them concise. Long files slow down every call and consume token budget.
+Files placed under `data/shared_knowledge/` can be auto-injected into an agent's system prompts via `context_files:` in the agent YAML. They are not searched — they are prepended verbatim (wrapped in XML tags) to every LLM block call in the session. Keep them concise. Long files slow down every call and consume token budget.

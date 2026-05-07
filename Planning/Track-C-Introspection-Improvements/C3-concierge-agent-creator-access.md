@@ -148,32 +148,32 @@ def test_agent_creator_sees_system_overview_in_context():
 ## Acceptance Criteria
 
 ### Concierge
-- [ ] `data/logs/` in `read_paths`
-- [ ] `data/workspace/` in `read_paths`
-- [ ] `data/config/` in `read_paths`
-- [ ] `data/shared_knowledge/` replaces `shared_knowledge/` (verify correct runtime path)
-- [ ] `list_tools` and `search_tools` in `concierge_loop.yaml` route block tools
+- [x] `data/logs/` in `read_paths`
+- [x] `data/workspace/` in `read_paths`
+- [x] `data/config/` in `read_paths`
+- [x] `data/shared_knowledge/` replaces `shared_knowledge/` (verify correct runtime path)
+- [x] `list_tools` and `search_tools` in `concierge_loop.yaml` route block tools
 
 ### Agent Creator
-- [ ] `tools/` in `read_paths`
-- [ ] `data/agents/` and `data/flows/` in `read_paths`
-- [ ] `data/logs/` in `read_paths`
-- [ ] `data/workspace/agent_creator/` in `read_paths`
-- [ ] `docs/project-onboarding.md` added to `context_files`
-- [ ] `list_tools` and `search_tools` in `agent_creator_loop.yaml` planning blocks
-- [ ] All tests pass
+- [x] `tools/` in `read_paths`
+- [x] `data/agents/` and `data/flows/` in `read_paths`
+- [x] `data/logs/` in `read_paths`
+- [x] `data/workspace/agent_creator/` in `read_paths`
+- [x] `docs/project-onboarding.md` added to `context_files`
+- [x] `list_tools` and `search_tools` in `agent_creator_loop.yaml` planning blocks
+- [x] All tests pass
 
 ---
 
-## QA Notes
+## QA Notes (2025-05-07)
 
-- Verify the `shared_knowledge/` vs `data/shared_knowledge/` distinction.  The
-  Concierge currently has `shared_knowledge/` which resolves to the repo root.
-  The actual runtime data is at `data/shared_knowledge/`.  This may be an existing
-  bug — confirm and fix consistently.
-- Agent Creator's `write_paths` (`data/agents/`, `data/flows/`) are unchanged.
-- Do NOT give Agent Creator write access to `tools/` — it reads source for context,
-  but tool creation requires a human to add to the codebase.
+- [x] Verified `shared_knowledge/` → `data/shared_knowledge/`. The old path resolved to the repo root and did not contain the runtime data. The new path correctly points to the data directory where shared knowledge is stored.
+- [x] Agent Creator's `write_paths` (`data/agents/`, `data/flows/`) remain unchanged.
+- [x] Agent Creator only has read access to `tools/` - it reads source for context, but tool creation requires a human to add to the codebase.
+- [x] Confirmed `agent_creator_loop.yaml` gather block already had `list_tools` and `search_tools` - no changes needed.
+- [x] All 17 agent_creator tests passed.
+- [x] All 26 concierge tests passed.
+- [x] Guardrail config tests passed.
 
 ---
 

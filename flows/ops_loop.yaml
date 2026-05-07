@@ -79,12 +79,16 @@ blocks:
         # for apply / report: (no action_input needed)
       ```
     tools:
+      - list_tools
+      - search_tools
       - grep_files
       - list_files
       - read_file
       - run_command
       - search_memory
     transitions:
+      list_tools: list_tools_block
+      search_tools: search_tools_block
       grep_files: grep_block
       list_files: list_block
       read_file: read_block
@@ -133,6 +137,21 @@ blocks:
     tool: search_memory
     transitions:
       default: plan
+
+  list_tools_block:
+    type: tool_call
+    tool: list_tools
+    input_keys: []
+    transitions:
+      default: plan
+
+  search_tools_block:
+    type: tool_call
+    tool: search_tools
+    input_keys: [query]
+    transitions:
+      default: plan
+
   # ── Guardrail: review plan before applying changes ───────────────────────────
 
   check_plan:

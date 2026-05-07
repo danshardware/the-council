@@ -28,6 +28,11 @@ permissions:
     - flows/
     - docs/
     - config/
+    - tools/
+    - data/agents/
+    - data/flows/
+    - data/logs/
+    - data/workspace/agent_creator/
   allowed_commands: []
 
 memory:
@@ -39,3 +44,5 @@ context_files:
     tag: "agent_creation_guide"
   - glob: "docs/how-to-add-tools.md"
     tag: "tool_creation_guide"
+  - glob: "docs/project-onboarding.md"
+    tag: "system_overview"

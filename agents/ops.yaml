@@ -28,10 +28,15 @@ permissions:
     - data/shared_knowledge/ops/
   # read_paths are NOT session-scoped — read-only source directories
   read_paths:
+    - "."                        # repo root (engine/, tools/, pocketflow/, etc.)
     - agents/
     - flows/
     - config/
     - docs/
+    - data/logs/
+    - data/workspace/
+    - data/config/
+    - data/shared_knowledge/
   allowed_commands:
     - git
     - grep
