@@ -9,9 +9,14 @@ wheels/
 # Virtual environments
 .venv
 
-# Actual environment
+# Actual environment files (do NOT commit these)
 .env
-.env.*
+.env.local
+.env.production
+.env.staging
+.env.development
+# Keep the template tracked (do NOT ignore)
+!.env.template
 
 # All mutable state lives under data/ (mounted volume in production)
 # Old locations kept here during transition period

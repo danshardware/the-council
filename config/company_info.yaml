@@ -1,0 +1,10 @@
+# config/company_info.yaml  (shipped with the image — not to be edited by deployers)
+# This is the built-in fallback. It triggers the "not configured" behaviour.
+# Deployers configure via data/config/company_info.yaml (written by Ops during B3).
+name: "an unconfigured Council instance"
+description: |
+  Content safety is not yet configured for this deployment.
+  When asked to review content, tell the user to run the onboarding flow:
+    uv run run.py --agent concierge --flow onboarding --prompt "begin onboarding"
+  Then return: verdict: needs_confirmation with that message as the reason.
+restricted_topics: []

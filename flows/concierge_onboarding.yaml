@@ -164,14 +164,72 @@ blocks:
       - write_file
     transitions:
       write_file: mission_write_block
-      agent_setup: agent_setup
-      default: agent_setup
+      agent_setup: guardrail_config
+      default: guardrail_config
 
   mission_write_block:
     type: tool_call
     tool: write_file
     transitions:
       default: write_mission
+
+  # ── Guardrail configuration (B3) ────────────────────────────────────────────
+  # Ask about off-limits topics, delegate to Ops if user provides restrictions.
+
+  guardrail_config:
+    type: llm
+    system_prompt: |
+      The mission file has been written.
+
+      Ask the human one simple question:
+      "Are there any specific topics that should always be off-limits for the
+      Council's AI agents? (e.g. competitor names, regulated industries, internal
+      project codenames.) If not, just say 'nothing specific' and we'll use sensible
+      defaults."
+
+      If the human provides restrictions → respond with action: delegate_to_ops,
+      passing an instruction to write data/config/company_info.yaml with:
+        - name: <company name from mission>
+        - description: <one-line description from mission>
+        - restricted_topics: [<list from human>]
+
+      If the human says nothing specific or skips → respond with action: agent_setup.
+
+      Respond ONLY with valid YAML:
+      ```yaml
+      reasoning: "what the human said and whether to delegate"
+      action: ask_human | delegate_to_ops | agent_setup
+      action_input:
+        # for ask_human: message
+        # for delegate_to_ops: instruction (what to write and where)
+      ```
+    tools:
+      - spawn_agent
+    transitions:
+      ask_human: guardrail_config_ask
+      delegate_to_ops: guardrail_config_ops
+      agent_setup: agent_setup
+      default: agent_setup
+
+  guardrail_config_ask:
+    type: human_reply
+    transitions:
+      replied: guardrail_config
+      default: guardrail_config_human_input
+
+  guardrail_config_human_input:
+    type: human_input
+    prompt: "Are there any topics that should always be off-limits?"
+    transitions:
+      approved: guardrail_config
+      rejected: agent_setup
+      default: agent_setup
+
+  guardrail_config_ops:
+    type: tool_call
+    tool: spawn_agent
+    transitions:
+      default: agent_setup
 
   # ── Step 4: Agent setup ──────────────────────────────────────────────────────
 
